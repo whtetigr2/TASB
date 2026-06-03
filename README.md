@@ -244,7 +244,7 @@ TASB is a **sampling-regime translation layer.** The model is frozen. The weight
 
 ## License and patent notice
 
-USPTO Provisional Application No. 64/019,999 filed March 28, 2026. All rights reserved pending patent examination. Research use permitted with attribution. Commercial licensing inquiries: contact the inventor.
+Research use permitted with attribution. Commercial licensing inquiries: contact the inventor.
 
 ---
 
