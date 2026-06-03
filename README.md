@@ -2,8 +2,9 @@
 
 **A no-retrain inference bridge between frozen pretrained transformers and stochastic-compute hardware substrates.**
 
-*USPTO Provisional Application No. 64/019,999 — Filed March 28, 2026*  
-*Inventor: Paul W. Shaver*
+*Paul W. Shaver — 2026*
+
+> **Push note (2026-06-03):** Initial public release. M1–M7 closed. Full 2D characterization complete. M8 (architecture auto-detection, MoE support) is the next milestone.
 
 ---
 
