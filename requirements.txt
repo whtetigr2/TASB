@@ -1,0 +1,19 @@
+# TASB — Thermodynamic Attention Sampling Bridge
+# Core dependencies
+# Install with: pip install -r requirements.txt
+
+# PyTorch — install separately first (see QUICKSTART.md)
+# https://pytorch.org/get-started/locally/
+torch>=2.1.0
+
+# HuggingFace stack
+transformers>=4.40.0
+accelerate>=0.27.0
+huggingface_hub>=0.21.0
+
+# 4-bit quantization (CUDA only — skip on CPU-only installs)
+# If you get an error here on CPU, install without this line
+bitsandbytes>=0.43.0
+
+# Standard library (no install needed, listed for reference)
+# csv, os, sys, zlib, time, gc, datetime, inspect, contextlib
