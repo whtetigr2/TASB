@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.lightning/
+*.egg-info/
+.env
+tasb_2d_sweep_rows_*.csv
+tasb_stress_ctx_*.csv
+tasb_stress_gen_*.csv
+tasb_longgen_text_*.csv
+tasb_longgen_sampling_text_*.csv
+tasb_m7_alpha_a*.csv

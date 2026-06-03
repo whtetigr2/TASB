@@ -1,0 +1,114 @@
+# TASB Milestone Status
+
+Per Codex's eight-milestone proof ladder.
+Last updated: 2026-06-03
+
+---
+
+## M1 — Canonical stack ✓ CLOSED
+**What it proves:** Single frozen codebase, no duplicate branches, no ambiguous imports.
+**Status:** Closed. Five production files (`tasb_capture_v2.py`, `tasb_sampler_v2.py`, `tasb_injector_v2.py`, `tasb_pipeline_v2.py`, `tasb_m5_faithfulness.py`) plus tests. Pre-RoPE legacy files archived under `legacy/` with provenance note marking them as not-valid bridge-faithfulness evidence.
+**Note:** Legacy archive is partial; canonical NEW stack is clean.
+
+## M2 — Correct measurement object ✓ CLOSED
+**What it proves:** The bridge measures post-RoPE per-Q-head attention, not the pre-RoPE legacy object.
+**Method:** Capture `q_post_rope (B, n_q, S, head_dim)`, `k_post_rope (B, n_kv, S, head_dim)`, the live additive mask, and scaling. Patch `apply_rotary_pos_emb` and `eager_attention_forward` at module level rather than reimplementing them.
+**Verification:** Bit-exact (`max diff 0.00e+00`) on probed layers L0/L6/L12/L18/L24/L27. Independent from-scratch RoPE implementation matches HF's live tensors at 0.00e+00.
+
+## M3 — Hard-fail invalid experiments ✓ CLOSED
+**What it proves:** A capture that fails its invariant cannot produce a "successful" summary CSV.
+**Method:** `LlamaAttentionCapture(strict_verify=True)` raises `RuntimeError` with per-layer diagnostics on failure.
+**Verification:** Test T5 in `test_capture_v2.py` deliberately corrupts capture; `verify_capture()` raises. Pass.
+
+## M4 — Exact vs approximate sampling backends agree ✓ CLOSED
+**What it proves:** Three sampler backends (exact, gumbel, RBM) all produce matching distributions on the same captured object.
+**Verification:**
+- `exact` vs `gumbel` at K=5000 on the same capture: max diff 0.0230, mean 0.0031 (within Monte Carlo precision)
+- `exact` vs analytical softmax at K=5000: max 0.0148
+- Both row-stochastic, zero mass on masked positions
+**Test:** T4 in `test_sampler_v2.py`.
+
+## M5 — Per-step faithfulness ✓ CLOSED + SEALED (2026-05-30)
+**What it proves:** Teacher-forced matched-context faithfulness. Under teacher-forced greedy decoding, the bridge preserves vanilla's next-token behavior with structural protection on confident-bucket positions.
+
+**Canonical claim (Codex-approved):**
+> On corrected post-RoPE capture, single-layer L18 TASB at alpha=0.3 preserves vanilla top-1 on 98.9% of teacher-forced positions overall and 98.3% on non-cycle-looped prompts, with mean KL 0.00118 overall / 0.00201 varied. Across the full alpha sweep up to alpha=1.0, TASB produced zero flips at confident positions; disagreements concentrated in ambiguous/moderate positions where vanilla itself had small top-1 margins.
+
+**Artifact:** Sealed at `results/M5_FROZEN_20260530/` with sha256 manifest.
+**Patches in this round:** log_softmax KL (clamp removed, suppressed real KL 15-17x); measured alpha=0 identity per step (not hardcoded); cluster-bootstrap CIs (mean-of-prompt-means); zlib.crc32 stable seeds; multi-scale loop diagnostics; renamed prob_gap from logit_gap.
+
+## M6 — Production-realism ✓ CLOSED (2026-05-31)
+**What it proves:** Per-step faithfulness holds under realistic top-p sampling contexts (shadow mode), AND the bridge does not add trajectory divergence beyond what top-p induces on unmodified vanilla (seed sweep).
+
+**Shadow mode (matched-context faithfulness under top-p):**
+- alpha=0.3 top-1 agreement (cluster): 96.9%, mean KL 0.00149
+- alpha=0 max_abs_diff = 0.00e+00 across all 330 alpha=0 rows (per-step regression test)
+- Zero confident-bucket flips at every alpha in {0.1, 0.3, 0.5}; 100% of disagreements landed in MODERATE bucket
+
+**Seed sweep (Test 1 vs Test 2 + Test 3 dose-response):**
+- Test 1 (vanilla x vanilla under top-p): mean div@step 1.0-2.0, agreement 1.8-4.5%, loop rate 0%
+- Test 2 (bridge alpha=0.3 across seeds): mean div@step 1.2-1.9, agreement 2.0-4.2%, loop rate 0%
+- Test 3 (alpha dose-response, fixed seed): graduated drift; alpha=0.05 diverges at step 8 (17.5% agree), alpha>=0.1 dominated by top-p amplification
+- All bridge alpha=0.5 outputs remained coherent
+
+**Key finding:** Top-p sampling at temp=0.8 is the dominant source of trajectory divergence in free generation. The bridge's contribution at alpha=0.3 is statistically indistinguishable from RNG-driven vanilla-vs-vanilla variance.
+
+## M7 — Characterization sweep ✓ CLOSED (2026-06-03)
+**What it proves:** The M5/M6 numbers at L18, K=10, single seed are representative of bridge behavior across the full operating envelope. All five sub-sweeps closed with zero confident-bucket flips.
+
+**Sub-sweeps:**
+1. **Layer sweep** ✓ CLOSED — zero confident-bucket flips across L0-L27 (every 3 layers). Layer-independence of structural faithfulness confirmed.
+2. **K sweep** ✓ CLOSED — zero confident flips at K in {1, 3, 5, 10, 25, 50, 100}. KL drops monotonically. Production-K recommendation upgraded to K=50 for TSU silicon.
+3. **Seed variance** ✓ CLOSED — 12 seeds at L18/alpha=0.3/K=10. Top-1 98.80%+/-0.56%, KL CV 12.1%. Position-agreement bimodal: 95.6% unanimous, 4.4% non-unanimous ALL in AMBIGUOUS bucket. Zero confident-bucket flips.
+4. **alpha fine sweep** ✓ CLOSED — zero confident flips across alpha in {0.0...1.0}. KL grows smoothly with alpha. Results in `tasb_m7_alpha_*.csv` (2026-06-01).
+5. **Multi-layer composition** ✓ CLOSED — see canonical claim below.
+
+**M7-5 canonical claim:**
+> On open-loop multi-layer composition at alpha=0.3, K=10, seed=42, LLaMA 3.2-3B TASB produces zero confident-bucket flips across all five layer configs (C1:[L18], C2:[L18,L24], C3:[L18,L21,L24], C4:[L15,L18,L21,L24,L27], C5:[L18,L19,L20]). Top-1 agreement is 100% at C1 and C2; 98.82% at C3, C4, and C5 (one ambiguous-bucket disagreement each, prob_gap < 0.003). KL grows monotonically with layer count: C1 0.00138, C2 0.00207, C3 0.00256, C4 0.00515, C5 0.00263. Composition is bounded at production alpha. The single disagreement in C3/C4 is the same position (M75_CR step 11, prob_gap=0.0022); the C5 disagreement is a distinct position (M75_CR step 15, prob_gap=0.0000). All disagreements are in the AMBIGUOUS bucket. Zero moderate or confident flips at any config.
+
+**Artifact:** `results/tasb_m7_multilayer_20260603_000053.csv` + `results/tasb_m7_multilayer_console_20260603_000041.txt`
+
+**M7-5 implementation notes (2026-06-02/03):**
+- Refactor: `tasb_injector_v2.py` and `tasb_pipeline_v2.py` extended to multi-layer dict dispatch. One patched function, internal dispatch by `args[0].layer_idx` (confirmed present on LLaMA 3.2-3B). Patch-once/restore-once lifecycle with exception safety.
+- Regression tests: 15/15 pass in `tests/test_multilayer_v1.py`. Scalar path bit-exact against M5_FROZEN. alpha=0 identity holds in both scalar and list form. All guards fire correctly.
+- Sweep harness: `tasb_m7_multilayer.py`, Stage 1 protocol (C1-C5, 4 prompts, 40 steps).
+- KL growth is monotonic with layer count, not super-linear — composition is bounded.
+- C4 vs C5 KL (0.00515 vs 0.00263): adjacent layers produce less KL than spread layers at same count, consistent with overlapping receptive fields reducing independent perturbation.
+
+**Confident bucket definition** (cite alongside any zero-flip claim):
+- confident: prob_gap >= 0.5
+- moderate:  0.1 <= prob_gap < 0.5
+- ambiguous: prob_gap < 0.1
+
+## M8 — Calibration program (NOT STARTED)
+**What it must prove:** The bridge can auto-detect the model architecture it's handed (LLaMA variant, Mistral, Qwen, etc.) and configure capture/injection appropriately.
+**Components needed:** Architecture probe (Q/K/V shapes, KV grouping, RoPE present, mask convention, dtype, attention impl, layer count); auto-selection of capture method; auto-selection of injection layer policy.
+**Note:** Must handle MoE architecture from day one. Validation sequence: dense LLaMA variants -> Mixtral 8x7B -> LLaMA 4 Scout.
+
+---
+
+## Summary
+
+**Closed (7 of 8):** M1, M2, M3, M4, M5, M6, M7
+**In progress (0 of 8):** —
+**Not started (1 of 8):** M8
+
+**What we can claim today:**
+- Per-step faithfulness under both teacher-forced (M5) and realistic top-p (M6 shadow) contexts
+- Zero confident-position flips at any alpha from 0.0 to 1.0 (M5/M6/M7-1 through M7-4)
+- Layer-independence of structural faithfulness confirmed (M7-1, L0-L27)
+- K-independence confirmed; production-K recommendation K=50 for TSU silicon (M7-2)
+- Seed variance characterized: top-1 98.80%+/-0.56%, non-unanimous positions exclusively AMBIGUOUS (M7-3)
+- Bridge is invisible above top-p chaos floor in free generation (M6 seed sweep)
+- Bit-exact alpha=0 identity per step, regression-tested in scalar and list form
+- Open-loop multi-layer composition is bounded at production alpha: zero confident flips across C1-C5, KL grows monotonically with layer count (M7-5)
+- Multi-layer API validated: 15/15 regression tests pass on live model
+
+**What we cannot claim yet:**
+- Closed-loop multi-layer composition (open-loop only tested; closed-loop is M7-6 / M8-adjacent)
+- Behavior on models other than LLaMA 3.2-3B
+- TSU hardware validation (substrate doesn't exist publicly)
+- eta metric re-measured on refactored stack (legacy values invalid; must re-measure before citing)
+
+**Next milestone:** M8 — calibration program (architecture auto-detection, MoE support from day one)
+**After M8:** Demo wrapper (CLI + side-by-side + metrics panel), then GitHub-facing public release
