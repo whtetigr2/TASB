@@ -4,7 +4,7 @@
 
 *Paul W. Shaver — 2026*
 
-> **Push note (2026-06-03):** Initial public release. M1–M7 closed. Full 2D characterization complete. M8 (architecture auto-detection, MoE support) is the next milestone.
+> **Push note (2026-06-11):** Public release. M1–M7 closed. Full 2D characterization complete. Four-backend live demonstration validated, including Extropic's THRML reference Boltzmann sampler.
 
 ---
 
@@ -30,8 +30,44 @@ Measured on LLaMA 3.2-3B, teacher-forced, 13 alpha values × 8 layer configs × 
 | 5L     | [15,18,21,24,27] | **98.82%** | 0.00515 | 0 / 8,840 |
 | 10L    | [10–27 even] | **95.29%** | 0.00874 | 4 / 8,840 (at α≥0.85 only) |
 
-**Zero confident-position flips through α=0.70 across all layer configs.**  
+**Zero confident-position flips through α=0.70 across all layer configs.**
 The 4 confident flips that appear at α≥0.85 occur only in the two heaviest configs (10L and 6L) — 0.045% of all measured positions at maximum TSU participation.
+
+---
+
+## Live four-backend demonstration
+
+Interactive chat runtime with mid-conversation backend switching. Four independent Boltzmann samplers validated on the same frozen LLaMA 3.2-3B at α=1.0, single-layer L18, K=50, on the prompt *"Hello Llama! Are you ready to assist?"*:
+
+| Backend | Sampler                                    | KL-Div    | Top-1   | Confident flips |
+|---------|--------------------------------------------|-----------|---------|-----------------|
+| exact   | `torch.multinomial` over softmax           | 0.00068   | 100.0%  | 0               |
+| gumbel  | Gumbel-max in logit space                  | 0.00047   | 100.0%  | 0               |
+| rbm     | Iterative RBM Gibbs                        | 0.00012   | 100.0%  | 0               |
+| thrml   | Extropic THRML block-Gibbs Boltzmann       | 0.00185   | 100.0%  | 0               |
+
+The `thrml` backend uses Extropic's reference Boltzmann sampler (`thrml.models.discrete_ebm.CategoricalEBMFactor` driven by `CategoricalGibbsConditional`). The substrate-agnostic claim — that TASB produces equivalent model behavior regardless of which Boltzmann sampler sits underneath — is demonstrated across four independent implementations.
+
+### Try the live chat
+
+```bash
+python tasb_llama32_chat_runtime.py --backend thrml
+```
+
+Mid-conversation slash commands switch backends, layers, alpha, and K on the fly:
+
+```
+/backend thrml      switch sampler (exact | gumbel | rbm | thrml | vanilla)
+/alpha 1.0          full TSU participation
+/layer 18           single-layer injection
+/layers 15 18 21    multi-layer composition
+/k 50               Boltzmann samples per position
+/telemetry          show full per-token pipeline (CAPTURE → SAMPLE → INJECT → TOKEN)
+/sweep              alpha dose-response on last prompt
+/stats              session metrics summary
+```
+
+Every turn displays a HUD with the active backend, KL from vanilla, top-1 agreement, confident-flip count, VRAM, and tokens per second. The bridge state is fully reactive — the next turn after any slash command reflects the new configuration.
 
 ---
 
@@ -63,7 +99,8 @@ This is the "hard part" that current stochastic hardware roadmaps treat as an op
                ┌──────────────┼──────────────┐
                │         SAMPLE               │
                │  seed_for_layer(base, idx)   │
-               │  multinomial(softmax, K) × K │
+               │  one of: exact | gumbel |    │
+               │          rbm   | thrml       │
                │  → p_thermo (B, n_q, S, S)  │
                └──────────────┬──────────────┘
                               │
@@ -109,6 +146,10 @@ Seven sub-sweeps across the complete operating envelope:
 | Scaling curve | 1L–10L | Zero confident flips through 10 layers; KL growth sub-linear |
 | 2D sweep | 13α × 8 configs | Zero confident flips through α=0.70; boundary at α=0.85/10L |
 
+### Substrate-agnostic bridge (live chat, 2026-06-10)
+
+Four independent Boltzmann sampler implementations validated end-to-end through the chat runtime on real prompts with full conversation context. KL < 0.01 and zero confident flips on every backend at α=1.0, single layer. The bridge is sampler-implementation-independent: any backend that draws from `exp(J)/Z` at the attention-scale temperature satisfies the contract.
+
 ### Structural alignment finding
 
 The bridge adds **4–7× more KL at ambiguous positions than at confident positions** across the full alpha range. Perturbation energy is geometrically concentrated in the low-certainty regions of the model's probability landscape. This is not a tuned behavior — it is a consequence of Boltzmann sampling at attention-scale temperature interacting with the model's existing confidence geometry.
@@ -138,12 +179,20 @@ The measured safe operating regime for the demo slider:
 
 ## Quickstart
 
-```bash
-git clone https://github.com/paulwshaver/TASB
-cd TASB
-pip install torch transformers bitsandbytes
+### Live chat with the bridge
 
-python - <<'EOF'
+```bash
+git clone https://github.com/whtetigr2/TASB
+cd TASB
+pip install torch transformers bitsandbytes thrml
+
+python tasb_llama32_chat_runtime.py --backend exact
+# Then in chat: /backend thrml, /alpha 1.0, /telemetry, etc.
+```
+
+### Programmatic single-pass
+
+```python
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 from tasb_pipeline_v2 import bridge_forward
@@ -167,6 +216,13 @@ result = bridge_forward(
 print(f"Top-1 agree: {result.logits.argmax(-1).eq(result.vanilla_logits.argmax(-1)).float().mean():.3f}")
 print(f"Mean KL: {torch.nn.functional.kl_div(result.logits.log_softmax(-1), result.vanilla_logits.softmax(-1), reduction='batchmean'):.5f}")
 
+# Same call with Extropic's THRML reference sampler
+result_thrml = bridge_forward(
+    model, tok,
+    prompt="The relationship between thermodynamics and computation",
+    layer_idx=18, alpha=0.3, backend='thrml', K=10, seed=42,
+    return_intermediates=True)
+
 # Multi-layer bridge (5 layers simultaneously)
 result_5L = bridge_forward(
     model, tok,
@@ -174,9 +230,6 @@ result_5L = bridge_forward(
     layer_idx=[15, 18, 21, 24, 27], alpha=0.3,
     backend='exact', K=10, seed=42,
     return_intermediates=True)
-
-print(f"5L Top-1 agree: {result_5L.logits.argmax(-1).eq(result_5L.vanilla_logits.argmax(-1)).float().mean():.3f}")
-EOF
 ```
 
 ---
@@ -190,14 +243,15 @@ python tests/test_multilayer_v1.py
 # Capture invariant + RoPE regression
 python tests/test_capture_v2.py
 
-# Sampler backend agreement
+# Sampler backend agreement (all four)
 python tests/test_sampler_v2.py
 
 # Injector invariants
 python tests/test_injector_v2.py
-```
 
-Expected: 15/15, all pass.
+# THRML backend standalone validation
+python tests/test_thrml_backend.py
+```
 
 ---
 
@@ -206,9 +260,11 @@ Expected: 15/15, all pass.
 | File | Role |
 |------|------|
 | `tasb_capture_v2.py` | Post-RoPE Q/K capture; patches `apply_rotary_pos_emb` + `eager_attention_forward` |
-| `tasb_sampler_v2.py` | Three backends: exact (multinomial), gumbel, RBM |
+| `tasb_sampler_v2.py` | Backend dispatch: `exact`, `gumbel`, `rbm`, `thrml` |
+| `tasb_sampler_thrml.py` | THRML block-Gibbs Boltzmann backend; bridges to `thrml.models.discrete_ebm` |
 | `tasb_injector_v2.py` | Dict-dispatch multi-layer injector; one patch, routes by `args[0].layer_idx` |
 | `tasb_pipeline_v2.py` | `bridge_forward()` entry point; input normalization, seed derivation, `BridgeResult` |
+| `tasb_llama32_chat_runtime.py` | Live console chat with HUD, slash commands, telemetry, CSV logging |
 
 ---
 
@@ -219,6 +275,7 @@ Expected: 15/15, all pass.
 - **α as QUBO-style thermodynamic penalty weight:** "Thermodynamic significance of QUBO encoding on quantum annealers" (arXiv:2601.04402)
 - **p-bit substrate physics:** Camsari et al., "p-Bits for Probabilistic Spin Logic"; "Probabilistic Computing with p-Bits"
 - **Transformer architecture:** Vaswani et al., "Attention Is All You Need"
+- **THRML reference sampler:** Extropic AI, `extropic-ai/thrml` on GitHub
 
 ---
 
@@ -230,15 +287,7 @@ Expected: 15/15, all pass.
 - Not a training method
 - Not "thermodynamic attention" in the KV-cache eviction sense (Carnot Attention, HuggingFace forum Feb 2026 — entirely different work)
 
-TASB is a **sampling-regime translation layer.** The model is frozen. The weights are unchanged. The bridge substitutes equivalent samples from the same distribution the model defines — it just sources those samples from stochastic hardware instead of a deterministic softmax.
-
----
-
-## What comes next
-
-- **M8:** Architecture auto-detection (MoE-ready; Mixtral 8x7B → LLaMA 4 Scout validation)
-- **Live demo:** Interactive slider demo — alpha control, per-layer toggles, side-by-side attention heatmaps, token streaming
-- **Hardware handoff:** Chip-specific I/O wrapper for TSU silicon integration
+TASB is a **sampling-regime translation layer.** The model is frozen. The weights are unchanged. The bridge substitutes equivalent samples from the same distribution the model defines — it just sources those samples from stochastic hardware (or any Boltzmann sampler) instead of a deterministic softmax.
 
 ---
 
