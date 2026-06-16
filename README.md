@@ -4,7 +4,7 @@
 
 *Paul W. Shaver — 2026*
 
-> **Push note (2026-06-11):** Public release. M1–M7 closed. Full 2D characterization complete. Four-backend live demonstration validated, including Extropic's THRML reference Boltzmann sampler.
+> **Push note (2026-06-16):** THRML vmap patch — 8x throughput improvement (22s/token → 2.5s/token on T4). Repo restructured. All faithfulness numbers unchanged.
 
 ---
 

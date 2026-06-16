@@ -17,3 +17,11 @@ bitsandbytes>=0.43.0
 
 # Standard library (no install needed, listed for reference)
 # csv, os, sys, zlib, time, gc, datetime, inspect, contextlib
+
+# THRML backend — Extropic reference Boltzmann sampler (NVIDIA CUDA only)
+# Skip these if you are on CPU, AMD, or Apple Silicon
+# The exact/gumbel/rbm backends work without these on any hardware
+thrml>=0.1.0
+jax>=0.4.25
+jaxlib>=0.4.25
+equinox>=0.11.0

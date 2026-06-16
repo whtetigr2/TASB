@@ -249,3 +249,18 @@ Validated on:
 ## Questions
 
 Open an issue on GitHub or contact whtetigr2@gmail.com
+
+---
+
+## THRML backend (optional — NVIDIA only)
+
+The `thrml` backend uses Extropic's reference Boltzmann sampler. It requires
+NVIDIA CUDA. Skip this on CPU, AMD, or Apple Silicon — the `exact`, `gumbel`,
+and `rbm` backends are mathematically equivalent and run on any hardware.
+
+```bash
+pip install thrml jax jaxlib equinox
+```
+
+On non-NVIDIA hardware, start with `--backend exact` (default). You will not
+be able to switch to `/backend thrml` without the above packages and CUDA.

@@ -112,3 +112,60 @@ Last updated: 2026-06-03
 
 **Next milestone:** M8 — calibration program (architecture auto-detection, MoE support from day one)
 **After M8:** Demo wrapper (CLI + side-by-side + metrics panel), then GitHub-facing public release
+
+---
+
+## THRML Throughput Investigation (2026-06-16) — Infrastructure
+
+**Not a numbered milestone** — improves demo usability without changing
+correctness claims.
+
+**Problem:** THRML backend running at ~38s/token on T4. Per-token timing
+showed `thrml=` flat at ~22s/step independent of seq_len, ruling out
+JAX shape-recompilation.
+
+**Root cause:** `tasb_sampler_thrml.py` rebuilt 7 fresh JAX objects per head,
+24 heads per token = 552 sequential `sample_states` calls. GPU sat idle
+between dispatches.
+
+**Secondary bug (bug registry #6):** `tasb_sampler_v2.py` had hardcoded
+`n_warmup=50, steps_per_sample=2` at the call site, overriding patched
+defaults. Fixed: now explicitly passes `n_warmup=0, steps_per_sample=1`.
+
+**Fix:** `jax.vmap` over the head dimension. Build program once per token,
+swap J via `eqx.tree_at` (0.2ms overhead), dispatch all 24 heads in one
+fused GPU call.
+
+**Result:** ~22s/token → ~2.5s/token on T4 (8x). Diagnostic evidence in
+`diagnostics/tasb_thrml_batch_diag_v1.py`: PATH A 20.58s / PATH B 0.94s /
+PATH C (direct JAX ceiling) 0.002s.
+
+**Faithfulness unchanged:** KL=0.00027–0.00068, Top-1=100%, Conf-Flips=0.
+
+**Remaining gap:** ~2.5s/token vs `exact` backend's ~0.4s/token. This is
+the cost of THRML's Boltzmann sampling infrastructure on GPU simulation.
+On real TSU silicon this disappears — the chip samples at physical timescales.
+The gap is a simulation artifact, not a bridge artifact.
+
+**Files changed:** `tasb_sampler_thrml.py` (vmap), `tasb_sampler_v2.py`
+(call-site fix), `diagnostics/` (full audit trail).
+
+---
+
+## M8 — Reframed (2026-06-16)
+
+Original M8 (architecture auto-detection across model families) is deferred.
+The Extropic pitch is built on LLaMA 3.2-3B. Auto-detection across Mixtral/
+LLaMA 4 is productization scope, not demo scope.
+
+**Actual next milestone: Demo Wrapper**
+- CLI side-by-side (vanilla vs bridge output)
+- Live metrics panel (KL/top-1/flips)
+- "Apple pie test" — a clean compelling prompt showing the bridge in action
+- Clone-and-run in under 5 minutes on NVIDIA hardware
+- README updated to reflect demo-ready status
+
+**M8-lite (optional, 1 day):** Architecture guard — assert model is a
+supported LLaMA 3.2-3B variant before running, with a clear error if not.
+Prevents silent failures on untested model variants without requiring full
+auto-detection.
