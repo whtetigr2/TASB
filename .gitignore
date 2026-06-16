@@ -10,3 +10,24 @@ tasb_stress_gen_*.csv
 tasb_longgen_text_*.csv
 tasb_longgen_sampling_text_*.csv
 tasb_m7_alpha_a*.csv
+
+# Backup files
+*.bak
+*.bak_prevmap
+
+# Run logs
+*.log
+
+# Results data (experimental outputs, not code)
+results/
+
+# Stray CSVs and console logs in root
+*.csv
+tasb_test_multilayer_v1_*.txt
+tasb_m7_multilayer_console_*.txt
+
+# Old backup runtimes
+tasb_llama32_chat_runtime_v_pre_telemetry_removal_backup.py
+
+# Claude project files
+.claude/

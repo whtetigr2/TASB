@@ -94,8 +94,8 @@ from tasb_capture_v2 import LayerCapture
 
 
 # ── Backend enum ──────────────────────────────────────────────────────────
-Backend = Literal['exact', 'gumbel', 'rbm']
-VALID_BACKENDS: set[str] = {'exact', 'gumbel', 'rbm'}
+Backend = Literal['exact', 'gumbel', 'rbm', 'thrml', 'qubo']
+VALID_BACKENDS: set[str] = {'exact', 'gumbel', 'rbm', 'thrml', 'qubo'}
 
 
 @dataclass
@@ -139,6 +139,25 @@ def sample(capture: LayerCapture, config: SamplerConfig) -> torch.Tensor:
         return _sample_gumbel(logits, config)
     elif config.backend == 'rbm':
         return _sample_rbm(logits, config)
+    elif config.backend == 'thrml':
+        from tasb_sampler_thrml import thrml_sample
+        return thrml_sample(
+            capture,
+            K=config.K,
+            seed=config.seed,
+            n_warmup=0,
+            steps_per_sample=1,
+        )
+    elif config.backend == 'qubo':
+        from tasb_sampler_qubo import qubo_sample
+        return qubo_sample(
+            capture,
+            K=config.K,
+            seed=config.seed,
+            lam_multiplier=1.0,
+            n_warmup=200,
+            steps_per_sample=5,
+        )
     else:
         # SamplerConfig __post_init__ should have caught this; defensive
         raise ValueError(f"unknown backend: {config.backend}")
