@@ -289,27 +289,15 @@ def build_figure(token_record: dict, alpha: float,
         q_idx    = S - 1
         marble_x = pos_arr.astype(float)
         marble_y = np.full(len(pos_arr), float(q_idx))
-        j_idx    = pos_arr.clip(0, S - 1)
-        marble_z = -J[q_idx, j_idx] + 0.25
-
-        # Top token position
-        top_idx = (token_record["top_tokens"][0]["idx"]
-                   if token_record.get("top_tokens") else 0)
-        top_idx = min(top_idx, S - 1)
-
-        colors = [
-            marble_color if int(p) == top_idx
-            else "rgba(100,100,120,0.4)"   # dimmer for non-top positions
-            for p in pos_arr
-        ]
+        marble_z = -J[q_idx, pos_arr] + 0.25
 
         marbles = go.Scatter3d(
             x=marble_x, y=marble_y, z=marble_z,
             mode="markers",
             marker=dict(
                 size=5,
-                color=colors,
-                opacity=0.92,
+                color=marble_color,
+                opacity=0.85,
                 line=dict(color="#000008", width=0.5),
             ),
             hoverinfo="skip",
@@ -318,17 +306,26 @@ def build_figure(token_record: dict, alpha: float,
         traces.append(marbles)
 
     # ── Well labels ───────────────────────────────────────────────────────────
-    top_tokens = token_record.get("top_tokens", [])[:6]
-    lx, ly, lz, lt = [], [], [], []
+    # Place labels at the top-6 energy minima in the last query row of J.
+    # Label each with the corresponding top token by probability rank.
+    # This correctly maps vocab probability rank -> position-space energy well.
+    top_tokens_list = token_record.get("top_tokens", [])[:6]
+    q_idx = S - 1
+    last_row = -J[q_idx, :]          # energy values for last query row
+    # Find top-6 positions by lowest energy (deepest wells)
+    n_labels = min(6, S, len(top_tokens_list))
+    well_positions = np.argsort(last_row)[:n_labels]  # ascending = deepest first
 
-    for t in top_tokens:
-        ki = min(t["idx"], S - 1)
-        qi = S - 1
-        ez = -J[qi, ki]
-        lx.append(float(ki))
-        ly.append(float(qi))
-        lz.append(float(ez) - 0.6)
-        lt.append(f"<b>{t['text']}</b><br>{t['prob']*100:.1f}%")
+    lx, ly, lz, lt = [], [], [], []
+    for rank, pos in enumerate(well_positions):
+        if rank >= len(top_tokens_list):
+            break
+        tok_info = top_tokens_list[rank]
+        ez = float(last_row[pos])
+        lx.append(float(pos))
+        ly.append(float(q_idx))
+        lz.append(ez - 0.8)
+        lt.append(f"<b>{tok_info['text']}</b><br>{tok_info['prob']*100:.1f}%")
 
     if lx:
         labels = go.Scatter3d(
@@ -337,7 +334,7 @@ def build_figure(token_record: dict, alpha: float,
             text=lt,
             textfont=dict(
                 family="Courier New, monospace",
-                size=10,
+                size=11,
                 color="#f2a050",
             ),
             hoverinfo="skip",
@@ -591,21 +588,52 @@ with desc_col:
     )
 
 if animate and data and tokens:
-    for i, tok_rec in enumerate(tokens):
-        fig_f = build_figure(tok_rec, alpha=alpha, backend=backend)
-        plot_slot.plotly_chart(
-            fig_f, use_container_width=True,
-            config={"displayModeBar": False},
-            key=f"af_{i}",
-        )
+    INTERP_STEPS = 4    # intermediate frames between each token step
+    FRAME_SLEEP  = 0.08 # seconds per interpolation frame — smooth morphing
 
-        kl_f  = tok_rec.get("kl", 0.0)
-        t1_f  = tok_rec.get("top1_match", True)
-        pg_f  = tok_rec.get("prob_gap", 0.0)
-        bkt_f = tok_rec.get("bucket", "confident")
-        s_f   = tok_rec.get("seq_len", 0)
-        van_f = tok_rec.get("van_top1_text", "")
-        inj_f = tok_rec.get("inj_top1_text", "")
+    for i in range(len(tokens)):
+        curr = tokens[i]
+        J_curr = np.array(curr["J_matrix"], dtype=np.float32)
+        S_curr = J_curr.shape[0]
+
+        # Interpolate between previous and current J matrix
+        if i == 0:
+            frames = [curr]
+        else:
+            prev   = tokens[i - 1]
+            J_prev = np.array(prev["J_matrix"], dtype=np.float32)
+            S_prev = J_prev.shape[0]
+            # Both are downsampled to MAX_S so shapes should match
+            # If they differ (S grew), pad previous to current size
+            if S_prev != S_curr:
+                frames = [curr]  # skip interpolation on size change
+            else:
+                frames = []
+                for t in range(1, INTERP_STEPS + 1):
+                    alpha_t = t / INTERP_STEPS
+                    J_blend = (1 - alpha_t) * J_prev + alpha_t * J_curr
+                    # Build a blended record using current metadata
+                    blended = dict(curr)
+                    blended["J_matrix"] = J_blend.tolist()
+                    frames.append(blended)
+
+        for frame_rec in frames:
+            fig_f = build_figure(frame_rec, alpha=alpha, backend=backend)
+            plot_slot.plotly_chart(
+                fig_f, use_container_width=True,
+                config={"displayModeBar": False},
+                key=f"af_{i}_{id(frame_rec)}",
+            )
+            time.sleep(FRAME_SLEEP)
+
+        # Update metrics and text after each full token step
+        kl_f  = curr.get("kl", 0.0)
+        t1_f  = curr.get("top1_match", True)
+        pg_f  = curr.get("prob_gap", 0.0)
+        bkt_f = curr.get("bucket", "confident")
+        s_f   = curr.get("seq_len", 0)
+        van_f = curr.get("van_top1_text", "")
+        inj_f = curr.get("inj_top1_text", "")
 
         kl_cf  = "good" if kl_f < 0.005 else "warn"
         flip_f = "✓ match" if t1_f else f"✗ flip [{bkt_f}]"
@@ -654,7 +682,6 @@ if animate and data and tokens:
             f'<span class="token-new">{generated}</span></div>',
             unsafe_allow_html=True,
         )
-        time.sleep(0.35)
 
 # ── Backend comparison summary table ─────────────────────────────────────────
 if data:
