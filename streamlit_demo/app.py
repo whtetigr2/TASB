@@ -359,25 +359,25 @@ def build_figure(token_record: dict, alpha: float,
         scene=dict(
             bgcolor="#0a0a0f",
             xaxis=dict(
-                title="Key position",
-                titlefont=dict(color="#444", size=9,
-                               family="Courier New"),
+                title=dict(text="Key position",
+                           font=dict(color="#444", size=9,
+                                     family="Courier New")),
                 tickfont=dict(color="#333", size=7),
                 gridcolor="#111120",
                 showbackground=False,
             ),
             yaxis=dict(
-                title="Query position",
-                titlefont=dict(color="#444", size=9,
-                               family="Courier New"),
+                title=dict(text="Query position",
+                           font=dict(color="#444", size=9,
+                                     family="Courier New")),
                 tickfont=dict(color="#333", size=7),
                 gridcolor="#111120",
                 showbackground=False,
             ),
             zaxis=dict(
-                title="Energy (−logit)",
-                titlefont=dict(color="#666", size=9,
-                               family="Courier New"),
+                title=dict(text="Energy (-logit)",
+                           font=dict(color="#666", size=9,
+                                     family="Courier New")),
                 tickfont=dict(color="#444", size=7),
                 gridcolor="#111120",
                 showbackground=False,
@@ -385,19 +385,18 @@ def build_figure(token_record: dict, alpha: float,
             aspectratio=dict(x=1.2, y=1.2, z=0.6),
             camera=dict(
                 eye=dict(x=1.5, y=-1.8, z=1.0),
-                up=dict(x=0, y=0, z=1),
             ),
         ),
-        annotations=[dict(
-            text=(f"backend={backend}  α={alpha:.1f}  "
-                  f"S={s_len}  KL={kl:.5f}  {bkt}"),
-            xref="paper", yref="paper",
-            x=0.01, y=0.99,
-            xanchor="left", yanchor="top",
-            font=dict(family="Courier New", size=10, color="#555"),
-            showarrow=False,
-        )],
         showlegend=False,
+    )
+    fig.add_annotation(
+        text=(f"backend={backend}  a={alpha:.1f}  "
+              f"S={s_len}  KL={kl:.5f}  {bkt}"),
+        xref="paper", yref="paper",
+        x=0.01, y=0.99,
+        xanchor="left", yanchor="top",
+        font=dict(family="Courier New", size=10, color="#555"),
+        showarrow=False,
     )
     return fig
 
