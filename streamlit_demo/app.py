@@ -299,7 +299,7 @@ def build_figure(token_record: dict, alpha: float,
 
         colors = [
             marble_color if int(p) == top_idx
-            else marble_color + "88"   # dimmer for non-top positions
+            else "rgba(100,100,120,0.4)"   # dimmer for non-top positions
             for p in pos_arr
         ]
 
@@ -410,7 +410,7 @@ st.markdown(
 st.markdown(
     '<p class="tasb-subtitle">'
     'Real attention energy landscapes · LLaMA 3.2-3B · Layer 18 · '
-    'K=50 Boltzmann samples · Paul W. Shaver 2026 · USPTO 64/019,999'
+    'K=50 Boltzmann samples · Paul W. Shaver 2026'
     '</p>',
     unsafe_allow_html=True,
 )
@@ -709,7 +709,7 @@ if data:
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown(
     '<p class="tasb-footer">'
-    'TASB · USPTO Provisional 64/019,999 · Paul W. Shaver 2026 · '
+    'TASB · Paul W. Shaver 2026 · '
     'github.com/whtetigr2/TASB · '
     'Real data. Every claim has a CSV. Every CSV has a script.'
     '</p>',
