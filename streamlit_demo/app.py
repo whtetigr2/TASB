@@ -20,7 +20,7 @@ import streamlit as st
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="TASB — Thermodynamic Attention Sampling Bridge",
-    page_icon="⚡",
+    page_icon="🌡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -404,7 +404,7 @@ def build_figure(token_record: dict, alpha: float,
 
 # ── App layout ────────────────────────────────────────────────────────────────
 st.markdown(
-    '<p class="tasb-title">⚡ TASB — Thermodynamic Attention Sampling Bridge</p>',
+    '<p class="tasb-title">TASB — Thermodynamic Attention Sampling Bridge</p>',
     unsafe_allow_html=True,
 )
 st.markdown(
