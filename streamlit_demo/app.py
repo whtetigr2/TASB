@@ -511,14 +511,14 @@ def build_animated_figure(tokens: list, alpha: float,
             buttons=[
                 dict(label="▶  Play", method="animate",
                      args=[None, dict(
-                         frame=dict(duration=100, redraw=False),
+                         frame=dict(duration=120, redraw=True),
                          fromcurrent=True,
                          transition=dict(duration=80, easing="cubic-in-out"),
                          mode="immediate",
                      )]),
                 dict(label="⏸  Pause", method="animate",
                      args=[[None], dict(
-                         frame=dict(duration=0, redraw=False),
+                         frame=dict(duration=0, redraw=True),
                          mode="immediate",
                          transition=dict(duration=0),
                      )]),
@@ -528,7 +528,7 @@ def build_animated_figure(tokens: list, alpha: float,
             steps=[dict(method="animate",
                         args=[[str(k)],
                               dict(mode="immediate",
-                                   frame=dict(duration=100, redraw=False),
+                                   frame=dict(duration=120, redraw=True),
                                    transition=dict(duration=80))],
                         label=str(k))
                    for k in range(n)],
@@ -540,7 +540,20 @@ def build_animated_figure(tokens: list, alpha: float,
             y=0.0, x=0.0, len=1.0, pad=dict(t=40),
         )],
     )
-    fig.update_layout(scene=SCENE_CFG)
+    # Add uirevision to scene to preserve camera during redraw=True frames
+    fig.update_layout(scene=dict(
+        uirevision="camera_lock",
+        bgcolor="#0a0a0f",
+        xaxis=dict(title="Key position", showbackground=False,
+                   gridcolor="#111120", tickfont=dict(color="#333", size=7)),
+        yaxis=dict(title="Query position", showbackground=False,
+                   gridcolor="#111120", tickfont=dict(color="#333", size=7)),
+        zaxis=dict(title="Energy", showbackground=False,
+                   gridcolor="#111120", tickfont=dict(color="#444", size=7),
+                   range=[-1, None]),
+        aspectratio=dict(x=1.4, y=1.4, z=0.9),
+        camera=dict(eye=dict(x=1.3, y=-1.6, z=0.9)),
+    ))
     return fig
 
 
