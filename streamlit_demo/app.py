@@ -258,27 +258,48 @@ data = load_data()
 
 # ── Surface helpers ───────────────────────────────────────────────────────────
 def prepare_surface(J_raw: np.ndarray) -> np.ndarray:
+    """
+    Convert raw J matrix to plottable energy surface.
+
+    Masked positions (causal mask, J < MASK_THRESHOLD) are set to ZERO
+    rather than NaN — this fills the entire S×S square with a flat baseline.
+    The valid lower-triangular region rises into peaks and wells above it.
+    No cliff, no missing corner — just flat ocean with terrain emerging from it.
+    """
     J = J_raw.copy().astype(np.float64)
-    J[J < MASK_THRESHOLD] = np.nan
+
+    # Identify masked positions before any transformation
+    causal_mask = J < MASK_THRESHOLD
+
+    # Energy: negate so high logit = deep well (low energy)
     E = -J
-    valid = E[~np.isnan(E)]
-    if len(valid) > 0:
-        E = E - np.nanmin(E)
+
+    # Normalize valid region to zero baseline
+    valid_vals = E[~causal_mask]
+    if len(valid_vals) > 0:
+        E = E - valid_vals.min()
+
+    # Set masked positions to exactly zero — flat baseline
+    # They were high positive values from -(-inf), now brought to floor
+    E[causal_mask] = 0.0
+
     return E
 
 
-def enhance_wells(E: np.ndarray, top_positions: list,
-                  well_depth: float = 2.5, well_width: float = 1.5) -> np.ndarray:
+def enhance_wells(E: np.ndarray, top_positions: list, J_raw: np.ndarray,
+                  well_depth: float = 3.0, well_width: float = 1.8) -> np.ndarray:
+    """Carve gaussian wells at top token positions. Masked positions stay at zero."""
     E_e = E.copy()
     S   = E.shape[0]
     q   = S - 1
     x   = np.arange(S, dtype=np.float64)
     for rank, pos in enumerate(top_positions[:6]):
-        if np.isnan(E[q, pos]):
+        if J_raw[q, pos] < MASK_THRESHOLD:
             continue
-        d = well_depth / (rank + 1)
-        g = d * np.exp(-((x - pos) ** 2) / (2 * well_width ** 2))
-        E_e[q, :] = np.where(np.isnan(E_e[q, :]), np.nan, E_e[q, :] - g)
+        d     = well_depth / (rank + 1)
+        g     = d * np.exp(-((x - pos) ** 2) / (2 * well_width ** 2))
+        valid = J_raw[q, :] >= MASK_THRESHOLD
+        E_e[q, :] = np.where(valid, E_e[q, :] - g, E_e[q, :])
     return E_e
 
 
@@ -286,35 +307,32 @@ def build_surface_data(token_record: dict) -> dict:
     J_raw = np.array(token_record["J_matrix"], dtype=np.float32)
     S     = J_raw.shape[0]
 
-    last_row = J_raw[S - 1, :].copy()
-    last_row[last_row < MASK_THRESHOLD] = np.nan
-    valid_mask = ~np.isnan(last_row)
+    # Top positions — only valid (unmasked) positions in last query row
+    last_row   = J_raw[S - 1, :].copy()
+    valid_mask = last_row >= MASK_THRESHOLD
     if valid_mask.sum() > 0:
-        ranked    = np.argsort(-last_row[valid_mask])
         valid_idx = np.where(valid_mask)[0]
+        ranked    = np.argsort(-last_row[valid_mask])
         top_pos   = valid_idx[ranked[:6]].tolist()
     else:
         top_pos = list(range(min(6, S)))
 
-    E  = prepare_surface(J_raw)
-    E  = enhance_wells(E, top_pos)
+    E = prepare_surface(J_raw)
+    E = enhance_wells(E, top_pos, J_raw)
 
     positions = token_record.get("sample_positions", [])
     pos_arr   = np.array(positions, dtype=int).clip(0, S - 1) if positions else np.array([], dtype=int)
     q_idx     = S - 1
     mx = pos_arr.astype(float)
     my = np.full(len(pos_arr), float(q_idx))
-    mz = np.array([
-        float(E[q_idx, p]) + 0.3 if not np.isnan(E[q_idx, p]) else 0.3
-        for p in pos_arr
-    ])
+    mz = np.array([float(E[q_idx, p]) + 0.3 for p in pos_arr])
 
     top_tok = token_record.get("top_tokens", [])
     lx, ly, lz, lt = [], [], [], []
     for rank, pos in enumerate(top_pos[:6]):
         if rank >= len(top_tok):
             break
-        ez = float(E[q_idx, pos]) if not np.isnan(E[q_idx, pos]) else 0.0
+        ez = float(E[q_idx, pos])
         lx.append(float(pos))
         ly.append(float(q_idx))
         lz.append(ez - 0.5)
@@ -329,10 +347,13 @@ def build_surface_data(token_record: dict) -> dict:
 
 
 SURFACE_COLORSCALE = [
-    [0.00, "#0d0500"], [0.15, "#3d1200"],
-    [0.35, "#8b3000"], [0.55, "#c85000"],
-    [0.75, "#e87820"], [0.90, "#f2a050"],
-    [1.00, "#ffd080"],
+    [0.00, "#1a0800"],   # flat baseline — dark amber
+    [0.08, "#3d1200"],   # slight rise
+    [0.20, "#7a2800"],   # terrain emerging
+    [0.40, "#c84000"],   # peaks forming
+    [0.60, "#e86000"],   # high peaks
+    [0.80, "#f2a050"],   # very high
+    [1.00, "#fff0a0"],   # spike tips — bright yellow-white
 ]
 
 SCENE_CFG = dict(
@@ -342,9 +363,10 @@ SCENE_CFG = dict(
     yaxis=dict(title="Query position", showbackground=False,
                gridcolor="#111120", tickfont=dict(color="#333", size=7)),
     zaxis=dict(title="Energy",         showbackground=False,
-               gridcolor="#111120", tickfont=dict(color="#444", size=7)),
-    aspectratio=dict(x=1.2, y=1.2, z=0.6),
-    camera=dict(eye=dict(x=1.5, y=-1.8, z=1.0)),
+               gridcolor="#111120", tickfont=dict(color="#444", size=7),
+               range=[-1, None]),  # allow wells to go slightly below baseline
+    aspectratio=dict(x=1.4, y=1.4, z=0.9),  # taller Z = more dramatic spikes
+    camera=dict(eye=dict(x=1.3, y=-1.6, z=0.9)),  # slightly lower angle
 )
 
 
@@ -381,7 +403,7 @@ def build_static_figure(record: dict, alpha: float, backend: str) -> go.Figure:
     fig = go.Figure(data=traces)
     fig.update_layout(
         paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
-        margin=dict(l=0, r=0, t=20, b=0), height=560, showlegend=False,
+        margin=dict(l=0, r=0, t=20, b=0), height=620, showlegend=False,
     )
     fig.update_layout(scene=SCENE_CFG)
     fig.add_annotation(
@@ -461,7 +483,7 @@ def build_animated_figure(tokens: list, alpha: float,
     n = len(plotly_frames)
     fig.update_layout(
         paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
-        margin=dict(l=0, r=0, t=20, b=60), height=620, showlegend=False,
+        margin=dict(l=0, r=0, t=20, b=60), height=680, showlegend=False,
         updatemenus=[dict(
             type="buttons", showactive=False,
             y=0.02, x=0.5, xanchor="center", yanchor="bottom",
