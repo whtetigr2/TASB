@@ -429,6 +429,7 @@ def build_static_figure(record: dict, alpha: float, backend: str) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False)
 def build_animated_figure(tokens: list, alpha: float,
                             backend: str, interp: int = 3) -> go.Figure:
     mc       = BACKEND_COLORS.get(backend, "#22ffcc")
@@ -457,12 +458,6 @@ def build_animated_figure(tokens: list, alpha: float,
 
     d0  = frame_list[0][0]
     S0  = d0["S"]
-    t0  = tokens[0]
-    tt0 = t0.get("top_tokens", [])[:8]
-    bar_labels0 = [t["text"].strip() or "·" for t in tt0]
-    bar_probs0  = [t["prob"] * 100 for t in tt0]
-    bar_colors0 = [mc] * len(bar_labels0)
-
     fig = go.Figure(data=[
         # Trace 0: 3D surface
         go.Surface(z=d0["E"], x=np.arange(S0), y=np.arange(S0),
@@ -482,33 +477,12 @@ def build_animated_figure(tokens: list, alpha: float,
                      textfont=dict(family="Courier New, monospace",
                                    size=11, color="#f2a050"),
                      hoverinfo="skip", scene="scene"),
-        # Trace 3: probability distribution bar chart (2D subplot)
-        go.Bar(
-            x=bar_probs0,
-            y=bar_labels0,
-            orientation="h",
-            marker=dict(color=bar_colors0, opacity=0.85),
-            xaxis="x2", yaxis="y2",
-            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
-            name="distribution",
-        ),
     ])
 
     plotly_frames = []
     for k, (fd, tok_ref) in enumerate(frame_list):
         S_f     = fd["S"]
         tt_f    = tok_ref.get("top_tokens", [])[:8]
-        b_lab   = [t["text"].strip() or "·" for t in tt_f]
-        b_prob  = [t["prob"] * 100 for t in tt_f]
-        # Brightest bar = top token, fade lower ranks
-        b_cols  = []
-        for rank in range(len(b_lab)):
-            op = max(0.3, 1.0 - rank * 0.1)
-            r  = int(int(mc[1:3], 16) * op)
-            g  = int(int(mc[3:5], 16) * op)
-            b  = int(int(mc[5:7], 16) * op)
-            b_cols.append(f"rgb({r},{g},{b})")
-
         plotly_frames.append(go.Frame(
             data=[
                 go.Surface(z=fd["E"], x=np.arange(S_f), y=np.arange(S_f),
@@ -519,9 +493,7 @@ def build_animated_figure(tokens: list, alpha: float,
                              text=fd["lt"],
                              textfont=dict(family="Courier New, monospace",
                                            size=11, color="#f2a050")),
-                go.Bar(x=b_prob, y=b_lab, orientation="h",
-                       marker=dict(color=b_cols, opacity=0.85),
-                       xaxis="x2", yaxis="y2"),
+
             ],
             name=str(k),
         ))
@@ -531,31 +503,7 @@ def build_animated_figure(tokens: list, alpha: float,
     fig.update_layout(
         paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
         margin=dict(l=0, r=0, t=20, b=60), height=680, showlegend=False,
-        # Camera lock — user can rotate freely during animation
         uirevision="tasb_camera_lock",
-        # 3D scene occupies left 72% of the figure
-        scene=dict(
-            domain=dict(x=[0, 0.72], y=[0, 1]),
-            **{k: v for k, v in SCENE_CFG.items() if k != "bgcolor"},
-            bgcolor="#0a0a0f",
-        ),
-        # Bar chart axes occupy right 25%
-        xaxis2=dict(
-            domain=[0.76, 1.0], anchor="y2",
-            showgrid=True, gridcolor="#111120",
-            tickfont=dict(family="Courier New", size=8, color="#444"),
-            title=dict(text="probability %",
-                       font=dict(family="Courier New", size=8, color="#444")),
-            range=[0, 100],
-            showline=False, zeroline=False,
-            bgcolor="#0a0a0f",
-        ),
-        yaxis2=dict(
-            domain=[0.05, 0.95], anchor="x2",
-            autorange="reversed",
-            tickfont=dict(family="Courier New", size=9, color="#888"),
-            showgrid=False, showline=False, zeroline=False,
-        ),
         updatemenus=[dict(
             type="buttons", showactive=False,
             y=0.02, x=0.5, xanchor="center", yanchor="bottom",
@@ -593,6 +541,7 @@ def build_animated_figure(tokens: list, alpha: float,
             y=0.0, x=0.0, len=1.0, pad=dict(t=40),
         )],
     )
+    fig.update_layout(scene=SCENE_CFG)
     return fig
 
 
@@ -951,18 +900,73 @@ with tab_anim:
         unsafe_allow_html=True,
     )
     if data and tokens and len(tokens) > 1:
-        with st.spinner("Pre-computing animation frames..."):
-            fig_a = build_animated_figure(tokens, alpha=alpha, backend=backend)
-        st.plotly_chart(fig_a, use_container_width=True,
-                        config={
-                            "displayModeBar": True,
-                            "modeBarButtonsToRemove": [
-                                "toImage", "sendDataToCloud",
-                                "toggleSpikelines",
-                            ],
-                            "displaylogo": False,
-                            "staticPlot": False,
-                        }, key="anim_chart")
+        anim_col, dist_col = st.columns([3, 1])
+
+        with anim_col:
+            with st.spinner("Pre-computing animation frames..."):
+                fig_a = build_animated_figure(tokens, alpha=alpha, backend=backend)
+            st.plotly_chart(fig_a, use_container_width=True,
+                            config={
+                                "displayModeBar": True,
+                                "modeBarButtonsToRemove": [
+                                    "toImage", "sendDataToCloud",
+                                    "toggleSpikelines",
+                                ],
+                                "displaylogo": False,
+                                "staticPlot": False,
+                            }, key="anim_chart")
+
+        with dist_col:
+            # Probability distribution panel — updates with step slider
+            st.markdown(
+                '<p style="font-family:Courier New;font-size:0.60rem;'
+                'color:#444;text-transform:uppercase;letter-spacing:0.12em;'
+                'margin-bottom:0.4rem;">Token distribution · current step</p>',
+                unsafe_allow_html=True,
+            )
+            try:
+                curr_rec  = tokens[step]
+                tt        = curr_rec.get("top_tokens", [])[:8]
+                bc        = BACKEND_COLORS.get(backend, "#f2a050")
+                bar_probs = [t["prob"] * 100 for t in tt]
+                bar_labs  = [t["text"].strip() or "·" for t in tt]
+                bar_cols  = []
+                for rank in range(len(bar_labs)):
+                    op = max(0.25, 1.0 - rank * 0.1)
+                    r  = int(int(bc[1:3], 16) * op)
+                    g  = int(int(bc[3:5], 16) * op)
+                    b  = int(int(bc[5:7], 16) * op)
+                    bar_cols.append(f"rgb({r},{g},{b})")
+
+                fig_dist = go.Figure(go.Bar(
+                    x=bar_probs,
+                    y=bar_labs,
+                    orientation="h",
+                    marker=dict(color=bar_cols),
+                ))
+                fig_dist.update_layout(
+                    paper_bgcolor="#0a0a0f",
+                    plot_bgcolor="#0a0a0f",
+                    margin=dict(l=0, r=8, t=8, b=8),
+                    height=400,
+                    showlegend=False,
+                    xaxis=dict(
+                        range=[0, 100],
+                        tickfont=dict(family="Courier New", size=7, color="#444"),
+                        gridcolor="#111120", showgrid=True,
+                        zeroline=False,
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",
+                        tickfont=dict(family="Courier New", size=9, color="#888"),
+                        showgrid=False,
+                    ),
+                )
+                st.plotly_chart(fig_dist, use_container_width=True,
+                                config={"displayModeBar": False},
+                                key="dist_chart")
+            except (IndexError, TypeError):
+                pass
     else:
         st.info("Load real data to see the animation.", icon="ℹ️")
 
