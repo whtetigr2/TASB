@@ -586,30 +586,6 @@ with st.sidebar:
     st.session_state.alpha_idx = alpha_idx
     alpha = ALPHA_OPTIONS[alpha_idx]
 
-    st.markdown('<div style="height:0.6rem"></div>', unsafe_allow_html=True)
-
-    # ── What am I looking at ──────────────────────────────────────────────────
-    with st.expander("❓  What am I looking at?"):
-        st.markdown(
-            '<p style="font-family:Courier New;font-size:0.68rem;'
-            'color:#888;line-height:1.7;">'
-            '<b style="color:#f2a050">The surface</b> is the attention energy '
-            'landscape at Layer 18. Each point represents how much the model '
-            '"wants" to attend from one token to another. Deep wells = '
-            'high-probability tokens.<br><br>'
-            '<b style="color:#f2a050">The marbles</b> are 50 p-bits '
-            '(probabilistic bits) sampling the landscape simultaneously — '
-            'just like Extropic\'s TSU hardware would in silicon. Each marble '
-            'independently finds a low-energy well.<br><br>'
-            '<b style="color:#f2a050">The labels</b> show which actual tokens '
-            'sit at the bottom of each well, with their probability.<br><br>'
-            '<b style="color:#f2a050">Alpha (α)</b> controls how much the '
-            'stochastic hardware participates. α=0 is pure GPU. α=1 is full '
-            'TSU substitution. The model is never retrained.'
-            '</p>',
-            unsafe_allow_html=True,
-        )
-
     st.markdown('<div style="height:0.3rem"></div>', unsafe_allow_html=True)
     st.markdown(
         '<p style="font-family:Courier New;font-size:0.58rem;color:#222230;'
@@ -769,22 +745,112 @@ if new_step != st.session_state.token_step:
     st.rerun()
 
 # ── Tabs: Scrub | Animation ───────────────────────────────────────────────────
-tab_scrub, tab_anim = st.tabs(["🔍  Step View", "▶  Animated Generation"])
+tab_scrub, tab_anim, tab_explainer = st.tabs([
+    "🔍  Step View", "▶  Animated Generation", "❓  What is this?"
+])
 
 with tab_scrub:
     if not (data and tokens):
         st.info("⚠️ demo_data.json not found — showing synthetic data.", icon="⚠️")
-    fig_s = build_static_figure(record, alpha=alpha, backend=backend)
-    st.plotly_chart(fig_s, use_container_width=True,
-                    config={"displayModeBar": False}, key="static_chart")
+
+    chart_col, panel_col = st.columns([3, 1])
+
+    with chart_col:
+        fig_s = build_static_figure(record, alpha=alpha, backend=backend)
+        st.plotly_chart(fig_s, use_container_width=True,
+                        config={
+                            "displayModeBar": True,
+                            "modeBarButtonsToRemove": [
+                                "toImage", "sendDataToCloud",
+                                "toggleSpikelines",
+                                "hoverClosestCartesian",
+                                "hoverCompareCartesian",
+                            ],
+                            "modeBarButtonsToAdd": [],
+                            "displaylogo": False,
+                            "staticPlot": False,
+                        }, key="static_chart")
+
+    with panel_col:
+        # Token probability panel — color-coded ranked list
+        top_tok = record.get("top_tokens", [])[:8]
+        bc_panel = BACKEND_COLORS.get(backend, "#f2a050")
+
+        st.markdown(
+            f'<p style="font-family:Courier New;font-size:0.60rem;'
+            f'color:#444;text-transform:uppercase;letter-spacing:0.12em;'
+            f'margin-bottom:0.5rem;border-bottom:1px solid #1a1a30;'
+            f'padding-bottom:0.3rem;">'
+            f'Token wells · step {step}</p>',
+            unsafe_allow_html=True,
+        )
+
+        if top_tok:
+            # Build probability bars for each top token
+            max_prob = top_tok[0]["prob"] if top_tok else 1.0
+            rows_html = ""
+            for rank, t in enumerate(top_tok):
+                prob     = t["prob"]
+                pct      = int((prob / max(max_prob, 1e-8)) * 100)
+                text     = t["text"].replace(" ", "·").replace("<", "&lt;")
+
+                # Color: brightest for rank 0, fading for lower ranks
+                opacity  = max(0.3, 1.0 - rank * 0.12)
+                r, g, b  = (
+                    int(int(bc_panel[1:3], 16) * opacity),
+                    int(int(bc_panel[3:5], 16) * opacity),
+                    int(int(bc_panel[5:7], 16) * opacity),
+                )
+                bar_color = f"rgb({r},{g},{b})"
+
+                rows_html += f"""
+<div style="margin-bottom:0.55rem;">
+  <div style="display:flex;justify-content:space-between;
+              font-family:Courier New;font-size:0.65rem;
+              margin-bottom:0.15rem;">
+    <span style="color:{bar_color};font-weight:{'bold' if rank==0 else 'normal'}">
+      {'▶ ' if rank == 0 else '  '}{text}
+    </span>
+    <span style="color:#444">{prob*100:.1f}%</span>
+  </div>
+  <div style="background:#111120;border-radius:1px;height:4px;">
+    <div style="width:{pct}%;height:4px;border-radius:1px;
+                background:{bar_color};"></div>
+  </div>
+</div>"""
+
+            st.markdown(
+                f'<div style="padding:0.5rem 0.2rem;">{rows_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Dart physics explainer — honest description
+        st.markdown(
+            f'<div style="margin-top:1rem;padding:0.6rem 0.5rem;'
+            f'background:#0d0d1a;border:1px solid #1a1a30;border-radius:4px;">'
+            f'<p style="font-family:Courier New;font-size:0.60rem;'
+            f'color:#444;line-height:1.6;margin:0;">'
+            f'<span style="color:#f2a050">50 darts, thrown simultaneously.</span>'
+            f'<br>Each p-bit independently samples from the distribution. '
+            f'No exploration — direct parallel draws. '
+            f'Most land in the deepest well. '
+            f'Some scatter to shallower wells.'
+            f'<br><br>'
+            f'<span style="color:{bc_panel}">{backend}</span> '
+            f'— {BACKEND_DESC.get(backend, "")}'
+            f'</p></div>',
+            unsafe_allow_html=True,
+        )
 
 with tab_anim:
     st.markdown(
         '<p style="font-family:Courier New;font-size:0.68rem;color:#555;'
         'line-height:1.6;margin-bottom:0.5rem;">'
-        'Press ▶ Play — the energy landscape morphs token by token as the model '
-        'generates. Each frame shows the real attention surface reshaping. '
-        'p-bits scatter and re-settle into new wells with every token.'
+        'Press ▶ Play — the energy landscape reshapes token by token as the '
+        'model generates. Each frame shows the real attention surface. '
+        '50 p-bits are thrown simultaneously into the distribution at each step '
+        '— not rolling, not exploring. Direct parallel draws, like throwing '
+        '50 darts at once. Drag to rotate. Scroll to zoom.'
         '</p>',
         unsafe_allow_html=True,
     )
@@ -792,9 +858,75 @@ with tab_anim:
         with st.spinner("Pre-computing animation frames..."):
             fig_a = build_animated_figure(tokens, alpha=alpha, backend=backend)
         st.plotly_chart(fig_a, use_container_width=True,
-                        config={"displayModeBar": False}, key="anim_chart")
+                        config={
+                            "displayModeBar": True,
+                            "modeBarButtonsToRemove": [
+                                "toImage", "sendDataToCloud",
+                                "toggleSpikelines",
+                            ],
+                            "displaylogo": False,
+                            "staticPlot": False,
+                        }, key="anim_chart")
     else:
         st.info("Load real data to see the animation.", icon="ℹ️")
+
+with tab_explainer:
+    st.markdown("""
+<div style="font-family:Courier New;font-size:0.75rem;color:#888;
+            line-height:1.9;max-width:700px;">
+
+<p style="color:#f2a050;font-size:0.85rem;margin-bottom:1rem;">
+What you are looking at</p>
+
+<b style="color:#f2a050">The surface</b><br>
+The 3D landscape is the attention energy function at Layer 18 of LLaMA 3.2-3B,
+computed from the raw pre-softmax logits J = QK<sup>T</sup> / √d<sub>k</sub>.
+The Z-axis is energy (-J), so deep wells correspond to tokens the model
+strongly wants to attend to. The surface reshapes every token because the
+sequence grows and the model's attention pattern changes with context.
+<br><br>
+
+<b style="color:#f2a050">The dots (p-bits)</b><br>
+Each dot represents one of 50 probabilistic bits (p-bits) sampling the
+landscape. This is <b>not</b> exploration or gradient descent.
+Each p-bit independently draws a single sample from the Boltzmann distribution
+defined by the energy surface — like throwing 50 darts simultaneously at a
+dartboard weighted by probability. Most land in the deepest well (the most
+probable next token). Some scatter to shallower wells (less probable
+alternatives). The distribution of where they land <i>is</i> the Boltzmann
+distribution at temperature T = √d<sub>k</sub>.
+<br><br>
+
+<b style="color:#f2a050">The labels</b><br>
+The token labels show which vocabulary tokens sit at the bottom of each
+energy well, with their probability. The deepest well (▶ highlighted) is
+the token the model chose. The shallower wells are the alternatives it
+considered — real tokens, real probabilities, from the real model.
+<br><br>
+
+<b style="color:#f2a050">Alpha (α)</b><br>
+Controls TSU hardware participation. At α=0, the output is bit-exact vanilla
+GPU softmax. At α=1.0, the stochastic samples replace the softmax output
+entirely. At α=0.3 (production recommendation), zero confident-position flips
+were observed across 8,840 measured positions. The model is never retrained.
+<br><br>
+
+<b style="color:#f2a050">Why this matters</b><br>
+Extropic's TSU hardware physically samples Boltzmann distributions at chip
+speed. TASB is the software bridge that translates frozen transformer attention
+into the energy functions their hardware needs — without retraining, without
+weight modification. This demo shows that bridge working in real time on a
+real model generating real text.
+<br><br>
+
+<span style="color:#444">
+The surface you see is the exact function Extropic's hardware would sample from.
+The dots are what that sampling looks like. The generation below is what happens
+to the model's output when the hardware takes over.
+</span>
+
+</div>
+""", unsafe_allow_html=True)
 
 # ── Sing-along text ───────────────────────────────────────────────────────────
 if data and tokens:
