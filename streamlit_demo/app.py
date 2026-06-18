@@ -190,8 +190,21 @@ st.markdown("""
     text-align: center; margin-top: 1.5rem;
   }
 
-  /* Expander */
-  [data-testid="stExpander"] {
+  /* Mobile: force sidebar toggle button visible at all times */
+  [data-testid="collapsedControl"] {
+    background-color: #1a1a2e !important;
+    border: 1px solid #f2a050 !important;
+    border-radius: 4px !important;
+    color: #f2a050 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: flex !important;
+  }
+  [data-testid="collapsedControl"] svg {
+    fill: #f2a050 !important;
+  }
+
+
     background: #0d0d1a !important;
     border: 1px solid #1a1a30 !important;
     border-radius: 4px !important;
@@ -442,29 +455,60 @@ def build_animated_figure(tokens: list, alpha: float,
             else:
                 frame_list.append((d, d))
 
-    d0 = frame_list[0][0]
-    S0 = d0["S"]
+    d0  = frame_list[0][0]
+    S0  = d0["S"]
+    t0  = tokens[0]
+    tt0 = t0.get("top_tokens", [])[:8]
+    bar_labels0 = [t["text"].strip() or "·" for t in tt0]
+    bar_probs0  = [t["prob"] * 100 for t in tt0]
+    bar_colors0 = [mc] * len(bar_labels0)
 
     fig = go.Figure(data=[
+        # Trace 0: 3D surface
         go.Surface(z=d0["E"], x=np.arange(S0), y=np.arange(S0),
                    colorscale=SURFACE_COLORSCALE, showscale=False,
                    opacity=0.92, hoverinfo="skip",
                    lighting=dict(ambient=0.55, diffuse=0.85,
-                                 specular=0.15, roughness=0.65)),
+                                 specular=0.15, roughness=0.65),
+                   scene="scene"),
+        # Trace 1: marbles
         go.Scatter3d(x=d0["mx"], y=d0["my"], z=d0["mz"], mode="markers",
                      marker=dict(size=5, color=mc, opacity=0.88,
                                  line=dict(color="#000008", width=0.5)),
-                     hoverinfo="skip"),
+                     hoverinfo="skip", scene="scene"),
+        # Trace 2: well labels
         go.Scatter3d(x=d0["lx"], y=d0["ly"], z=d0["lz"], mode="text",
                      text=d0["lt"],
                      textfont=dict(family="Courier New, monospace",
                                    size=11, color="#f2a050"),
-                     hoverinfo="skip"),
+                     hoverinfo="skip", scene="scene"),
+        # Trace 3: probability distribution bar chart (2D subplot)
+        go.Bar(
+            x=bar_probs0,
+            y=bar_labels0,
+            orientation="h",
+            marker=dict(color=bar_colors0, opacity=0.85),
+            xaxis="x2", yaxis="y2",
+            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+            name="distribution",
+        ),
     ])
 
     plotly_frames = []
-    for k, (fd, _) in enumerate(frame_list):
-        S_f = fd["S"]
+    for k, (fd, tok_ref) in enumerate(frame_list):
+        S_f     = fd["S"]
+        tt_f    = tok_ref.get("top_tokens", [])[:8]
+        b_lab   = [t["text"].strip() or "·" for t in tt_f]
+        b_prob  = [t["prob"] * 100 for t in tt_f]
+        # Brightest bar = top token, fade lower ranks
+        b_cols  = []
+        for rank in range(len(b_lab)):
+            op = max(0.3, 1.0 - rank * 0.1)
+            r  = int(int(mc[1:3], 16) * op)
+            g  = int(int(mc[3:5], 16) * op)
+            b  = int(int(mc[5:7], 16) * op)
+            b_cols.append(f"rgb({r},{g},{b})")
+
         plotly_frames.append(go.Frame(
             data=[
                 go.Surface(z=fd["E"], x=np.arange(S_f), y=np.arange(S_f),
@@ -475,6 +519,9 @@ def build_animated_figure(tokens: list, alpha: float,
                              text=fd["lt"],
                              textfont=dict(family="Courier New, monospace",
                                            size=11, color="#f2a050")),
+                go.Bar(x=b_prob, y=b_lab, orientation="h",
+                       marker=dict(color=b_cols, opacity=0.85),
+                       xaxis="x2", yaxis="y2"),
             ],
             name=str(k),
         ))
@@ -484,6 +531,32 @@ def build_animated_figure(tokens: list, alpha: float,
     fig.update_layout(
         paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
         margin=dict(l=0, r=0, t=20, b=60), height=680, showlegend=False,
+        # Camera lock — user can rotate freely during animation
+        uirevision="tasb_camera_lock",
+        # 3D scene occupies left 72% of the figure
+        scene=dict(
+            domain=dict(x=[0, 0.72], y=[0, 1]),
+            **{k: v for k, v in SCENE_CFG.items() if k != "bgcolor"},
+            bgcolor="#0a0a0f",
+        ),
+        # Bar chart axes occupy right 25%
+        xaxis2=dict(
+            domain=[0.76, 1.0], anchor="y2",
+            showgrid=True, gridcolor="#111120",
+            tickfont=dict(family="Courier New", size=8, color="#444"),
+            title=dict(text="probability %",
+                       font=dict(family="Courier New", size=8, color="#444")),
+            range=[0, 100],
+            showline=False, zeroline=False,
+            bgcolor="#0a0a0f",
+        ),
+        yaxis2=dict(
+            domain=[0.05, 0.95], anchor="x2",
+            autorange="reversed",
+            tickfont=dict(family="Courier New", size=9, color="#888"),
+            showgrid=False, showline=False, zeroline=False,
+        ),
+        plot_bgcolor="#0a0a0f",
         updatemenus=[dict(
             type="buttons", showactive=False,
             y=0.02, x=0.5, xanchor="center", yanchor="bottom",
@@ -491,23 +564,26 @@ def build_animated_figure(tokens: list, alpha: float,
             font=dict(family="Courier New", size=10, color="#f2a050"),
             buttons=[
                 dict(label="▶  Play", method="animate",
-                     args=[None, dict(frame=dict(duration=80, redraw=True),
-                                      fromcurrent=True,
-                                      transition=dict(duration=60,
-                                                      easing="cubic-in-out"),
-                                      mode="immediate")]),
+                     args=[None, dict(
+                         frame=dict(duration=100, redraw=False),
+                         fromcurrent=True,
+                         transition=dict(duration=80, easing="cubic-in-out"),
+                         mode="immediate",
+                     )]),
                 dict(label="⏸  Pause", method="animate",
-                     args=[[None], dict(frame=dict(duration=0, redraw=False),
-                                        mode="immediate",
-                                        transition=dict(duration=0))]),
+                     args=[[None], dict(
+                         frame=dict(duration=0, redraw=False),
+                         mode="immediate",
+                         transition=dict(duration=0),
+                     )]),
             ],
         )],
         sliders=[dict(
             steps=[dict(method="animate",
                         args=[[str(k)],
                               dict(mode="immediate",
-                                   frame=dict(duration=80, redraw=True),
-                                   transition=dict(duration=60))],
+                                   frame=dict(duration=100, redraw=False),
+                                   transition=dict(duration=80))],
                         label=str(k))
                    for k in range(n)],
             active=0,
@@ -518,7 +594,6 @@ def build_animated_figure(tokens: list, alpha: float,
             y=0.0, x=0.0, len=1.0, pad=dict(t=40),
         )],
     )
-    fig.update_layout(scene=SCENE_CFG)
     return fig
 
 
@@ -953,17 +1028,36 @@ to the model's output when the hardware takes over.
 # ── Sing-along text ───────────────────────────────────────────────────────────
 if data and tokens:
     prompt_text = data["prompts"][selected]["text"]
-    done_tokens = "".join(t.get("token_text", "") for t in tokens[:step])
-    curr_token  = tokens[step].get("token_text", "") if step < len(tokens) else ""
-    remain      = "".join(t.get("token_text", "") for t in tokens[step+1:])
+
+    # Build token spans — each token gets its own colored span
+    # Step 0..step-1: done (dim)
+    # Step `step`: current (amber highlight)  
+    # Step step+1..: pending (very dim)
+    token_spans = ""
+    for i, t in enumerate(tokens):
+        tok_text = t.get("token_text", "")
+        if i < step:
+            token_spans += f'<span class="done">{tok_text}</span>'
+        elif i == step:
+            # Current token gets highlighted box
+            token_spans += (
+                f'<span class="current" '
+                f'style="background:#1a0f00;padding:0.1rem 0.2rem;'
+                f'border-radius:2px;">{tok_text}</span>'
+            )
+        else:
+            token_spans += f'<span class="pending">{tok_text}</span>'
 
     st.markdown(
         f'<div class="singalong">'
-        f'<span style="color:#555">{prompt_text}</span>'
-        f'<span class="done">{done_tokens}</span>'
-        f'<span class="current">{curr_token}</span>'
-        f'<span class="pending">{remain}</span>'
-        f'</div>',
+        f'<span style="color:#444">{prompt_text}</span>'
+        f'{token_spans}'
+        f'</div>'
+        f'<p style="font-family:Courier New;font-size:0.58rem;color:#333;'
+        f'margin-top:0.3rem;">'
+        f'Scrub the token step slider above to advance. '
+        f'During animation, drag the frame slider under the chart.'
+        f'</p>',
         unsafe_allow_html=True,
     )
 
