@@ -429,7 +429,6 @@ def build_static_figure(record: dict, alpha: float, backend: str) -> go.Figure:
     return fig
 
 
-@st.cache_data(show_spinner=False)
 def build_animated_figure(tokens: list, alpha: float,
                             backend: str, interp: int = 3) -> go.Figure:
     mc       = BACKEND_COLORS.get(backend, "#22ffcc")
@@ -903,8 +902,16 @@ with tab_anim:
         anim_col, dist_col = st.columns([3, 1])
 
         with anim_col:
-            with st.spinner("Pre-computing animation frames..."):
-                fig_a = build_animated_figure(tokens, alpha=alpha, backend=backend)
+            # Cache the figure in session_state — keyed on prompt+backend+alpha
+            # go.Figure with frames can't be serialized by st.cache_data,
+            # but session_state holds Python objects directly without serialization
+            anim_key = f"anim_{selected}_{backend}_{alpha}"
+            if anim_key not in st.session_state:
+                with st.spinner("Pre-computing animation frames..."):
+                    st.session_state[anim_key] = build_animated_figure(
+                        tokens, alpha=alpha, backend=backend
+                    )
+            fig_a = st.session_state[anim_key]
             st.plotly_chart(fig_a, use_container_width=True,
                             config={
                                 "displayModeBar": True,
