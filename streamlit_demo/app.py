@@ -556,7 +556,6 @@ def build_animated_figure(tokens: list, alpha: float,
             tickfont=dict(family="Courier New", size=9, color="#888"),
             showgrid=False, showline=False, zeroline=False,
         ),
-        plot_bgcolor="#0a0a0f",
         updatemenus=[dict(
             type="buttons", showactive=False,
             y=0.02, x=0.5, xanchor="center", yanchor="bottom",
