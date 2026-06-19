@@ -169,3 +169,106 @@ LLaMA 4 is productization scope, not demo scope.
 supported LLaMA 3.2-3B variant before running, with a clear error if not.
 Prevents silent failures on untested model variants without requiring full
 auto-detection.
+
+---
+
+## Full Results Tables (migrated from README, 2026-06-19)
+
+Migrated from the README during docs cleanup so the README can stay a lean
+quickstart. The M5/M6/M7 narrative writeups above remain authoritative; this
+section collects the summary tables and cross-cutting findings that previously
+lived in the README. No numbers changed in the move.
+
+**Result in one table**
+
+Measured on LLaMA 3.2-3B, teacher-forced, 13 alpha values × 8 layer configs ×
+4 prompts × 40 steps = **8,840 positions** across the full operating envelope:
+
+| Config | Layers | α=0.3 Top-1 | α=0.3 KL | Confident flips (all α) |
+|--------|--------|-------------|-----------|------------------------|
+| 1L     | [18]   | **100.00%** | 0.00138   | 0 / 8,840 positions    |
+| 5L     | [15,18,21,24,27] | **98.82%** | 0.00515 | 0 / 8,840 |
+| 10L    | [10–27 even] | **95.29%** | 0.00874 | 4 / 8,840 (at α≥0.85 only) |
+
+**Zero confident-position flips through α=0.70 across all layer configs.** The 4
+confident flips that appear at α≥0.85 occur only in the two heaviest configs
+(10L and 6L) — 0.045% of all measured positions at maximum TSU participation.
+
+**Four-backend live-chat comparison**
+
+Four independent Boltzmann samplers validated on the same frozen LLaMA 3.2-3B at
+α=1.0, single-layer L18, K=50, on the prompt *"Hello Llama! Are you ready to
+assist?"*:
+
+| Backend | Sampler                                    | KL-Div    | Top-1   | Confident flips |
+|---------|--------------------------------------------|-----------|---------|-----------------|
+| exact   | `torch.multinomial` over softmax           | 0.00068   | 100.0%  | 0               |
+| gumbel  | Gumbel-max in logit space                  | 0.00047   | 100.0%  | 0               |
+| rbm     | Iterative RBM Gibbs                        | 0.00012   | 100.0%  | 0               |
+| thrml   | Extropic THRML block-Gibbs Boltzmann       | 0.00185   | 100.0%  | 0               |
+
+The `thrml` backend uses Extropic's reference Boltzmann sampler
+(`thrml.models.discrete_ebm.CategoricalEBMFactor` driven by
+`CategoricalGibbsConditional`). The substrate-agnostic claim — that TASB produces
+equivalent model behavior regardless of which Boltzmann sampler sits underneath —
+is demonstrated across four independent implementations.
+
+**Substrate-agnostic bridge (live chat, 2026-06-10):** Four independent Boltzmann
+sampler implementations validated end-to-end through the chat runtime on real
+prompts with full conversation context. KL < 0.01 and zero confident flips on
+every backend at α=1.0, single layer. The bridge is sampler-implementation-
+independent: any backend that draws from `exp(J)/Z` at the attention-scale
+temperature satisfies the contract.
+
+**Characterization summary (M5 / M6 / M7)**
+
+Headline numbers; full writeups are in the M5, M6, and M7 sections above.
+
+- **M5 (faithfulness, sealed 2026-05-30):** single-layer L18 at α=0.3 preserves
+  vanilla top-1 on 98.9% of teacher-forced positions overall (98.3% on
+  non-cycle-looped prompts), mean KL 0.00118; zero flips at confident positions
+  across the full α sweep to α=1.0.
+- **M6 (production-realism, 2026-05-31):** under realistic top-p sampling
+  (shadow mode), top-1 agreement 96.9%, mean KL 0.00149. The bridge's trajectory
+  divergence at α=0.3 is statistically indistinguishable from RNG-driven
+  vanilla-vs-vanilla variance; top-p is the dominant source of trajectory chaos.
+- **M7 (full characterization, 2026-06-03):** seven sub-sweeps across the
+  complete operating envelope —
+
+| Sweep | Variable | Result |
+|-------|----------|--------|
+| Layer sweep | L0–L27 | Zero confident flips at every layer |
+| K sweep | K=1–100 | Zero confident flips; KL drops monotonically |
+| Seed variance | 12 seeds | Top-1 98.80%±0.56%; non-unanimous positions exclusively AMBIGUOUS |
+| α fine sweep | α=0.0–1.0 | Zero confident flips across full range |
+| Multi-layer composition | C1–C5 (1–5L) | Zero confident flips; KL saturates, does not compound |
+| Scaling curve | 1L–10L | Zero confident flips through 10 layers; KL growth sub-linear |
+| 2D sweep | 13α × 8 configs | Zero confident flips through α=0.70; boundary at α=0.85/10L |
+
+**Structural alignment finding**
+
+The bridge adds **4–7× more KL at ambiguous positions than at confident
+positions** across the full alpha range. Perturbation energy is geometrically
+concentrated in the low-certainty regions of the model's probability landscape.
+This is not a tuned behavior — it is a consequence of Boltzmann sampling at
+attention-scale temperature interacting with the model's existing confidence
+geometry.
+
+**Long-context and generation (stress test)**
+
+- Zero OOM through 10 layers at 512-token context (peak VRAM 3.58GB on 4-bit 3B model)
+- Zero speed penalty on capture-once generation: 5.9 tok/s with or without bridge at any layer count
+- 5-paragraph side-by-side at 256-token context: word-for-word identical output between vanilla and 5L bridge at α=0.3
+
+**Operating envelope**
+
+The measured safe operating regime for the demo slider:
+
+```
+α ∈ [0.00, 0.70]:  Zero confident flips at any layer config (0–10L)
+α ∈ [0.70, 0.85]:  First confident flips appear at 10L and 6L only
+α ∈ [0.85, 1.00]:  4 total confident flips across 8,840 positions
+                    at the two heaviest configs only
+```
+
+**Production recommendation:** α=0.3, K=50 (for TSU silicon), any layer config.
