@@ -6,11 +6,27 @@ Real attention energy landscapes from LLaMA 3.2-3B, layer 18.
 Pre-computed sweep: 5 prompts x 4 backends x 4 alphas x 25 tokens.
 """
 
+import inspect
 import json
 import os
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+
+
+def _fill_width(fn):
+    """Return the 'stretch to container width' kwarg matching the installed
+    Streamlit. `use_container_width` was deprecated and removed after
+    2025-12-31 in favour of width="stretch" — passing the removed kwarg to
+    st.button / st.plotly_chart on a newer Streamlit raises and wipes out the
+    widgets (this is what made the sidebar prompt/backend buttons vanish).
+    Prefer width="stretch" when supported, fall back for very old versions."""
+    try:
+        if "width" in inspect.signature(fn).parameters:
+            return {"width": "stretch"}
+    except (TypeError, ValueError):
+        pass
+    return {"use_container_width": True}
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -203,12 +219,6 @@ st.markdown("""
   [data-testid="collapsedControl"] svg {
     fill: #f2a050 !important;
   }
-
-
-    background: #0d0d1a !important;
-    border: 1px solid #1a1a30 !important;
-    border-radius: 4px !important;
-  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -383,6 +393,27 @@ SCENE_CFG = dict(
 )
 
 
+def well_annotations(d: dict, backend: str) -> list:
+    """3D scene annotations for the well labels.
+
+    Plotly's 3D text traces have no outline/halo support and, worse, get
+    occluded by the surface when you rotate — which is why the labels vanished.
+    Scene annotations render in an SVG layer *on top* of the WebGL scene, so
+    they stay visible at every camera angle, and a dark semi-opaque bgcolor
+    gives them the readable 'halo' contrast against the orange surface."""
+    mc = BACKEND_COLORS.get(backend, "#f2a050")
+    anns = []
+    for i in range(len(d["lx"])):
+        anns.append(dict(
+            x=d["lx"][i], y=d["ly"][i], z=d["lz"][i] + 0.5,
+            text=d["lt"][i], showarrow=False,
+            font=dict(family="Courier New, monospace", size=11, color="#ffe0b0"),
+            bgcolor="rgba(8,6,12,0.74)", bordercolor=mc, borderwidth=1,
+            xanchor="center", yanchor="middle",
+        ))
+    return anns
+
+
 def build_static_figure(record: dict, alpha: float, backend: str) -> go.Figure:
     d  = build_surface_data(record)
     S  = d["S"]
@@ -405,20 +436,15 @@ def build_static_figure(record: dict, alpha: float, backend: str) -> go.Figure:
                         line=dict(color="#000008", width=0.5)),
             hoverinfo="skip", name="p-bits",
         ))
-    if d["lx"]:
-        traces.append(go.Scatter3d(
-            x=d["lx"], y=d["ly"], z=d["lz"], mode="text",
-            text=d["lt"],
-            textfont=dict(family="Courier New, monospace", size=11, color="#f2a050"),
-            hoverinfo="skip", name="wells",
-        ))
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
         margin=dict(l=0, r=0, t=20, b=0), height=620, showlegend=False,
     )
-    fig.update_layout(scene=SCENE_CFG)
+    scene_cfg = dict(SCENE_CFG)
+    scene_cfg["annotations"] = well_annotations(d, backend)
+    fig.update_layout(scene=scene_cfg)
     fig.add_annotation(
         text=f"{backend}  α={alpha:.1f}  S={s_l}  KL={kl:.5f}  {bkt}",
         xref="paper", yref="paper", x=0.01, y=0.99,
@@ -470,30 +496,21 @@ def build_animated_figure(tokens: list, alpha: float,
                      marker=dict(size=5, color=mc, opacity=0.88,
                                  line=dict(color="#000008", width=0.5)),
                      hoverinfo="skip", scene="scene"),
-        # Trace 2: well labels
-        go.Scatter3d(x=d0["lx"], y=d0["ly"], z=d0["lz"], mode="text",
-                     text=d0["lt"],
-                     textfont=dict(family="Courier New, monospace",
-                                   size=11, color="#f2a050"),
-                     hoverinfo="skip", scene="scene"),
+        # Well labels are scene annotations (on top of the surface, not a
+        # text trace) so they stay readable at every camera angle.
     ])
 
     plotly_frames = []
     for k, (fd, tok_ref) in enumerate(frame_list):
         S_f     = fd["S"]
-        tt_f    = tok_ref.get("top_tokens", [])[:8]
         plotly_frames.append(go.Frame(
             data=[
                 go.Surface(z=fd["E"], x=np.arange(S_f), y=np.arange(S_f),
                            showscale=False, opacity=0.92, hoverinfo="skip"),
                 go.Scatter3d(x=fd["mx"], y=fd["my"], z=fd["mz"], mode="markers",
                              marker=dict(size=5, color=mc, opacity=0.88)),
-                go.Scatter3d(x=fd["lx"], y=fd["ly"], z=fd["lz"], mode="text",
-                             text=fd["lt"],
-                             textfont=dict(family="Courier New, monospace",
-                                           size=11, color="#f2a050")),
-
             ],
+            layout=go.Layout(scene=dict(annotations=well_annotations(fd, backend))),
             name=str(k),
         ))
     fig.frames = plotly_frames
@@ -553,7 +570,326 @@ def build_animated_figure(tokens: list, alpha: float,
                    range=[-1, None]),
         aspectratio=dict(x=1.4, y=1.4, z=0.9),
         camera=dict(eye=dict(x=1.3, y=-1.6, z=0.9)),
+        annotations=well_annotations(d0, backend),
     ))
+    return fig
+
+
+# ── Physics View — coupling network ───────────────────────────────────────────
+def get_top_k_edges(J: np.ndarray, k: int = 5) -> list:
+    """Top-K strongest (largest-logit) couplings per query row, respecting the
+    causal mask. Returns a list of (i, j, weight) tuples, self-loops excluded.
+
+    Same derivation as the PRD's get_top_k_edges — a pure function over the
+    existing J_matrix, no new data generation."""
+    edges = []
+    S = J.shape[0]
+    for i in range(S):
+        row   = J[i, :]
+        order = np.argsort(-row)
+        cnt   = 0
+        for j in order:
+            if cnt >= k:
+                break
+            j = int(j)
+            if j != i and row[j] >= MASK_THRESHOLD:
+                edges.append((i, j, float(row[j])))
+                cnt += 1
+    return edges
+
+
+def build_physics_data(token_record: dict, k: int = 5) -> dict:
+    """Derive the coupling-network graph from token_record['J_matrix'].
+
+    Nodes are token positions on a circular ring (x=cos θ, y=sin θ, θ by
+    position index). Node 'strength' is the summed magnitude of the top-K
+    edges incident to that node (as source or target) — i.e. the coupling
+    actually rendered. This makes node brightness track where the displayed
+    edges converge, surfacing the 2-4 attention-sink hub nodes. (Raw
+    sum|J[i,:]| grows monotonically with position under the causal mask and
+    does not align with where edges actually point.)"""
+    J = np.array(token_record["J_matrix"], dtype=np.float32)
+    S = J.shape[0]
+
+    theta = 2.0 * np.pi * np.arange(S) / max(S, 1)
+    nx = np.cos(theta)
+    ny = np.sin(theta)
+
+    edges = get_top_k_edges(J, k)
+
+    strength = np.zeros(S, dtype=np.float64)
+    for i, j, w in edges:
+        aw = abs(w)
+        strength[i] += aw
+        strength[j] += aw
+
+    return {"J": J, "S": S, "nx": nx, "ny": ny,
+            "edges": edges, "strength": strength}
+
+
+def build_physics_figure(token_record: dict, alpha: float,
+                         backend: str, k: int = 5) -> go.Figure:
+    """2D coupling-network figure — parallel in spirit to build_static_figure().
+    Step-driven and static (no animation): the same J matrix as Energy View,
+    rendered as the p-bit coupling graph a TSU chip would wire up."""
+    d        = build_physics_data(token_record, k=k)
+    S        = d["S"]
+    nx, ny   = d["nx"], d["ny"]
+    edges    = d["edges"]
+    strength = d["strength"]
+
+    bc = BACKEND_COLORS.get(backend, "#f2a050")
+    r0, g0, b0 = int(bc[1:3], 16), int(bc[3:5], 16), int(bc[5:7], 16)
+
+    s      = strength.copy()
+    s_max  = s.max() if s.size and s.max() > 0 else 1.0
+    s_norm = s / s_max
+
+    traces = []
+
+    # ── Edges, binned into strength tiers so a few stand out as thick/bright
+    #    amber over a faint background mesh of weaker couplings ──────────────
+    if edges:
+        ws     = np.array([abs(w) for (_, _, w) in edges], dtype=np.float64)
+        wmin   = ws.min()
+        wmax   = ws.max()
+        wrange = (wmax - wmin) if wmax > wmin else 1.0
+        NUM_TIERS = 6
+        tier_x = [[] for _ in range(NUM_TIERS)]
+        tier_y = [[] for _ in range(NUM_TIERS)]
+        for (i, j, w) in edges:
+            en = (abs(w) - wmin) / wrange                  # 0..1
+            t  = min(NUM_TIERS - 1, int(en * NUM_TIERS))
+            tier_x[t] += [nx[i], nx[j], None]
+            tier_y[t] += [ny[i], ny[j], None]
+        # Weak/faint tiers first (background), strong/bright tiers on top
+        for t in range(NUM_TIERS):
+            if not tier_x[t]:
+                continue
+            frac  = t / (NUM_TIERS - 1)
+            width = 0.6 + 4.6 * (frac ** 1.4)
+            op    = 0.05 + 0.80 * (frac ** 1.3)
+            traces.append(go.Scatter(
+                x=tier_x[t], y=tier_y[t], mode="lines",
+                line=dict(color=f"rgba({r0},{g0},{b0},{op:.3f})", width=width),
+                hoverinfo="skip", showlegend=False,
+            ))
+
+    # ── Nodes — size + amber colorscale both scale with coupling strength ──
+    node_size = 6.0 + 30.0 * (s_norm ** 1.3)
+    node_colorscale = [
+        [0.00, "#1a0d00"],
+        [0.35, "#4a2200"],
+        [0.70, bc],
+        [1.00, "#fff0c0"],
+    ]
+    hov = [f"position {i}<br>coupling {strength[i]:.1f}" for i in range(S)]
+    traces.append(go.Scatter(
+        x=nx, y=ny, mode="markers",
+        marker=dict(size=node_size, color=s_norm, colorscale=node_colorscale,
+                    cmin=0.0, cmax=1.0, showscale=False,
+                    line=dict(color="#000008", width=0.6)),
+        text=hov, hoverinfo="text", showlegend=False,
+    ))
+
+    # ── Labels — brightest few nodes only, to avoid clutter ──
+    n_lab = 6 if S > 20 else min(S, 6)
+    if S > 0:
+        top_nodes = np.argsort(-s_norm)[:n_lab]
+        traces.append(go.Scatter(
+            x=[1.16 * nx[i] for i in top_nodes],
+            y=[1.16 * ny[i] for i in top_nodes],
+            mode="text",
+            text=[f"p{int(i)}" for i in top_nodes],
+            textfont=dict(family="Courier New, monospace", size=11, color=bc),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
+        margin=dict(l=0, r=0, t=20, b=0), height=600, showlegend=False,
+        xaxis=dict(visible=False, range=[-1.35, 1.35],
+                   scaleanchor="y", scaleratio=1),
+        yaxis=dict(visible=False, range=[-1.35, 1.35]),
+    )
+    fig.add_annotation(
+        text=f"{backend}  α={alpha:.1f}  S={S}  top-{k} couplings/node",
+        xref="paper", yref="paper", x=0.01, y=0.99,
+        xanchor="left", yanchor="top",
+        font=dict(family="Courier New", size=9, color="#444"),
+        showarrow=False,
+    )
+    return fig
+
+
+PHYS_NUM_TIERS = 6
+PHYS_NODE_COLORSCALE = [
+    [0.00, "#1a0d00"],
+    [0.35, "#4a2200"],
+    [0.70, "_BC_"],          # placeholder, replaced per backend
+    [1.00, "#fff0c0"],
+]
+
+
+def _physics_traces(d: dict, f: float, backend: str,
+                    show_labels: bool = True) -> list:
+    """Build the constant-structure trace list (PHYS_NUM_TIERS edge tiers +
+    nodes + labels) for one animation frame at settle fraction f in [0,1].
+
+    f=0 → uniform, faintly-jittered 'fluctuating' state with no edges drawn;
+    f=1 → fully settled coupling pattern. Trace count is identical for every
+    f so the figure animates cleanly."""
+    S        = d["S"]
+    nx       = d["nx"].astype(np.float64).copy()
+    ny       = d["ny"].astype(np.float64).copy()
+    edges    = d["edges"]
+    strength = d["strength"]
+
+    bc = BACKEND_COLORS.get(backend, "#f2a050")
+    r0, g0, b0 = int(bc[1:3], 16), int(bc[3:5], 16), int(bc[5:7], 16)
+    node_colorscale = [[c[0], (bc if c[1] == "_BC_" else c[1])]
+                       for c in PHYS_NODE_COLORSCALE]
+
+    s_max  = strength.max() if strength.size and strength.max() > 0 else 1.0
+    s_norm = strength / s_max
+
+    # Thermal jitter that decays as the network settles
+    if f < 1.0 and S > 0:
+        rng = np.random.default_rng(S * 131 + int(round(f * 1000)))
+        amp = 0.07 * (1.0 - f)
+        ang = rng.uniform(0, 2 * np.pi, S)
+        nx += amp * np.cos(ang)
+        ny += amp * np.sin(ang)
+
+    traces = []
+
+    # ── Edge tiers (faint→bright), faded in by f ──
+    tier_x = [[] for _ in range(PHYS_NUM_TIERS)]
+    tier_y = [[] for _ in range(PHYS_NUM_TIERS)]
+    if edges:
+        ws     = np.array([abs(w) for (_, _, w) in edges], dtype=np.float64)
+        wmin   = ws.min()
+        wmax   = ws.max()
+        wrange = (wmax - wmin) if wmax > wmin else 1.0
+        for (i, j, w) in edges:
+            en = (abs(w) - wmin) / wrange
+            t  = min(PHYS_NUM_TIERS - 1, int(en * PHYS_NUM_TIERS))
+            tier_x[t] += [nx[i], nx[j], None]
+            tier_y[t] += [ny[i], ny[j], None]
+    for t in range(PHYS_NUM_TIERS):
+        frac  = t / (PHYS_NUM_TIERS - 1)
+        width = (0.6 + 4.6 * (frac ** 1.4)) * max(f, 0.001)
+        op    = (0.05 + 0.80 * (frac ** 1.3)) * f
+        traces.append(go.Scatter(
+            x=tier_x[t], y=tier_y[t], mode="lines",
+            line=dict(color=f"rgba({r0},{g0},{b0},{op:.3f})", width=width),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── Nodes — grow + brighten from uniform (f=0) to settled (f=1) ──
+    node_size  = 6.0 + 30.0 * (s_norm ** 1.3) * f
+    node_color = 0.12 * (1.0 - f) + s_norm * f
+    traces.append(go.Scatter(
+        x=nx, y=ny, mode="markers",
+        marker=dict(size=node_size, color=node_color, colorscale=node_colorscale,
+                    cmin=0.0, cmax=1.0, showscale=False,
+                    line=dict(color="#000008", width=0.6)),
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    # ── Labels — only once settled, brightest few only ──
+    if show_labels and f >= 0.999 and S > 0:
+        n_lab = 6 if S > 20 else min(S, 6)
+        top   = np.argsort(-s_norm)[:n_lab]
+        lx = [1.16 * nx[i] for i in top]
+        ly = [1.16 * ny[i] for i in top]
+        lt = [f"p{int(i)}" for i in top]
+    else:
+        lx, ly, lt = [], [], []
+    traces.append(go.Scatter(
+        x=lx, y=ly, mode="text", text=lt,
+        textfont=dict(family="Courier New, monospace", size=11, color=bc),
+        hoverinfo="skip", showlegend=False,
+    ))
+    return traces
+
+
+def build_physics_animated_figure(tokens: list, alpha: float,
+                                  backend: str, k: int = 5,
+                                  settle: int = 3) -> go.Figure:
+    """Native Plotly animation of the coupling network. Token-by-token sweep
+    (the network re-forms as the sequence grows) with a per-step settle
+    transition (nodes start fluctuating, edges fade in, then settle). Driven
+    entirely client-side by Play/Pause + a frame slider — no Streamlit sync."""
+    all_d = [build_physics_data(t, k=k) for t in tokens]
+
+    fig = go.Figure(data=_physics_traces(all_d[0], 1.0, backend))
+
+    frames = []
+    fi = 0
+    for d in all_d:
+        for s in range(1, settle + 1):
+            f = s / settle
+            frames.append(go.Frame(
+                data=_physics_traces(d, f, backend),
+                name=str(fi),
+            ))
+            fi += 1
+    fig.frames = frames
+    n = len(frames)
+
+    fig.update_layout(
+        paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f",
+        margin=dict(l=0, r=0, t=20, b=60), height=600, showlegend=False,
+        uirevision="phys_view_lock",
+        xaxis=dict(visible=False, range=[-1.4, 1.4],
+                   scaleanchor="y", scaleratio=1),
+        yaxis=dict(visible=False, range=[-1.4, 1.4]),
+        updatemenus=[dict(
+            type="buttons", showactive=False,
+            y=0.02, x=0.5, xanchor="center", yanchor="bottom",
+            bgcolor="#0d0d1a", bordercolor="#1a1a30",
+            font=dict(family="Courier New", size=10, color="#f2a050"),
+            buttons=[
+                dict(label="▶  Play", method="animate",
+                     args=[None, dict(
+                         frame=dict(duration=160, redraw=True),
+                         fromcurrent=True,
+                         transition=dict(duration=0),
+                         mode="immediate",
+                     )]),
+                dict(label="⏸  Pause", method="animate",
+                     args=[[None], dict(
+                         frame=dict(duration=0, redraw=True),
+                         mode="immediate",
+                         transition=dict(duration=0),
+                     )]),
+            ],
+        )],
+        sliders=[dict(
+            steps=[dict(method="animate",
+                        args=[[str(fi)],
+                              dict(mode="immediate",
+                                   frame=dict(duration=160, redraw=True),
+                                   transition=dict(duration=0))],
+                        label=str(fi // settle))
+                   for fi in range(n)],
+            active=0,
+            currentvalue=dict(prefix="Step: ",
+                              font=dict(family="Courier New", size=9, color="#555")),
+            bgcolor="#0d0d1a", bordercolor="#1a1a30", tickcolor="#222",
+            font=dict(family="Courier New", size=8, color="#333"),
+            y=0.0, x=0.0, len=1.0, pad=dict(t=40),
+        )],
+    )
+    fig.add_annotation(
+        text=f"{backend}  α={alpha:.1f}  top-{k} couplings/node  ▶ settling animation",
+        xref="paper", yref="paper", x=0.01, y=0.99,
+        xanchor="left", yanchor="top",
+        font=dict(family="Courier New", size=9, color="#444"),
+        showarrow=False,
+    )
     return fig
 
 
@@ -609,7 +945,7 @@ with st.sidebar:
         active = (st.session_state.sel_prompt == pk)
         border = f"border-left: 3px solid {BACKEND_COLORS.get(st.session_state.sel_backend,'#f2a050')};" if active else "border-left: 3px solid #1a1a30;"
         if st.button(f"{icon}  {label}", key=f"sb_prompt_{pk}",
-                     use_container_width=True):
+                     **_fill_width(st.button)):
             st.session_state.sel_prompt  = pk
             st.session_state.token_step  = 0
 
@@ -623,7 +959,7 @@ with st.sidebar:
         if st.button(
             f"{'▶ ' if active else '   '}{be}",
             key=f"sb_be_{be}",
-            use_container_width=True,
+            **_fill_width(st.button),
         ):
             st.session_state.sel_backend = be
             st.session_state.token_step  = 0
@@ -801,9 +1137,10 @@ if new_step != st.session_state.token_step:
     st.session_state.token_step = new_step
     st.rerun()
 
-# ── Tabs: Scrub | Animation ───────────────────────────────────────────────────
-tab_scrub, tab_anim, tab_explainer = st.tabs([
-    "🔍  Step View", "▶  Animated Generation", "❓  What is this?"
+# ── Tabs: Scrub | Animation | Physics | Explainer ─────────────────────────────
+tab_scrub, tab_anim, tab_physics, tab_explainer = st.tabs([
+    "🔍  Step View", "▶  Animated Generation",
+    "⚛  Physics View", "❓  What is this?"
 ])
 
 with tab_scrub:
@@ -814,7 +1151,7 @@ with tab_scrub:
 
     with chart_col:
         fig_s = build_static_figure(record, alpha=alpha, backend=backend)
-        st.plotly_chart(fig_s, use_container_width=True,
+        st.plotly_chart(fig_s, **_fill_width(st.plotly_chart),
                         config={
                             "displayModeBar": True,
                             "modeBarButtonsToRemove": [
@@ -925,7 +1262,7 @@ with tab_anim:
                         tokens, alpha=alpha, backend=backend
                     )
             fig_a = st.session_state[anim_key]
-            st.plotly_chart(fig_a, use_container_width=True,
+            st.plotly_chart(fig_a, **_fill_width(st.plotly_chart),
                             config={
                                 "displayModeBar": True,
                                 "modeBarButtonsToRemove": [
@@ -982,13 +1319,132 @@ with tab_anim:
                         showgrid=False,
                     ),
                 )
-                st.plotly_chart(fig_dist, use_container_width=True,
+                st.plotly_chart(fig_dist, **_fill_width(st.plotly_chart),
                                 config={"displayModeBar": False},
                                 key="dist_chart")
             except (IndexError, TypeError):
                 pass
     else:
         st.info("Load real data to see the animation.", icon="ℹ️")
+
+with tab_physics:
+    st.markdown(
+        '<p style="font-family:Courier New;font-size:0.68rem;color:#555;'
+        'line-height:1.6;margin-bottom:0.5rem;">'
+        'Same J matrix as Energy View — this is what a TSU chip\'s p-bit '
+        'coupling network would look like wired up for this token\'s attention '
+        'computation. Nodes are token positions; edges are the strongest '
+        'couplings J[i,j]. The bright hub nodes are where the network\'s '
+        'coupling converges — the attention sinks a real Boltzmann machine '
+        'would settle around. Same data as Energy View, two lenses.'
+        '<br>Press the Play button to watch the network settle and re-form '
+        'token by token. The hub panel on the right tracks the sidebar step.'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+    if not (data and tokens):
+        st.info("⚠️ demo_data.json not found — showing synthetic data.", icon="⚠️")
+
+    phys_chart_col, phys_panel_col = st.columns([3, 1])
+
+    with phys_panel_col:
+        st.markdown(
+            '<p style="font-family:Courier New;font-size:0.60rem;color:#444;'
+            'text-transform:uppercase;letter-spacing:0.12em;'
+            'margin-bottom:0.3rem;">Couplings shown per node (K)</p>',
+            unsafe_allow_html=True,
+        )
+        k_edges = st.slider(
+            "phys_k_slider",
+            min_value=2, max_value=12, value=5,
+            label_visibility="collapsed", key="phys_k_slider",
+        )
+
+        # Hub list — strongest coupling nodes, mirrors the token-wells panel
+        d_phys   = build_physics_data(record, k=k_edges)
+        strength = d_phys["strength"]
+        bc_phys  = BACKEND_COLORS.get(backend, "#f2a050")
+        st.markdown(
+            f'<p style="font-family:Courier New;font-size:0.60rem;'
+            f'color:#444;text-transform:uppercase;letter-spacing:0.12em;'
+            f'margin-top:0.8rem;margin-bottom:0.5rem;border-bottom:1px solid '
+            f'#1a1a30;padding-bottom:0.3rem;">Coupling hubs · step {step}</p>',
+            unsafe_allow_html=True,
+        )
+        if strength.size and strength.max() > 0:
+            order   = np.argsort(-strength)[:6]
+            s_max   = float(strength.max())
+            rows_html = ""
+            for rank, idx in enumerate(order):
+                idx     = int(idx)
+                val     = float(strength[idx])
+                pct     = int((val / s_max) * 100)
+                opacity = max(0.3, 1.0 - rank * 0.12)
+                r, g, b = (int(int(bc_phys[1:3], 16) * opacity),
+                           int(int(bc_phys[3:5], 16) * opacity),
+                           int(int(bc_phys[5:7], 16) * opacity))
+                bar_color = f"rgb({r},{g},{b})"
+                rows_html += f"""
+<div style="margin-bottom:0.55rem;">
+  <div style="display:flex;justify-content:space-between;
+              font-family:Courier New;font-size:0.65rem;
+              margin-bottom:0.15rem;">
+    <span style="color:{bar_color};font-weight:{'bold' if rank==0 else 'normal'}">
+      {'▶ ' if rank == 0 else '  '}p{idx}
+    </span>
+    <span style="color:#444">{val:.1f}</span>
+  </div>
+  <div style="background:#111120;border-radius:1px;height:4px;">
+    <div style="width:{pct}%;height:4px;border-radius:1px;
+                background:{bar_color};"></div>
+  </div>
+</div>"""
+            st.markdown(
+                f'<div style="padding:0.5rem 0.2rem;">{rows_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f'<div style="margin-top:0.5rem;padding:0.6rem 0.5rem;'
+            f'background:#0d0d1a;border:1px solid #1a1a30;border-radius:4px;">'
+            f'<p style="font-family:Courier New;font-size:0.60rem;'
+            f'color:#444;line-height:1.6;margin:0;">'
+            f'<span style="color:#f2a050">Node size + brightness</span> = total '
+            f'coupling strength. <span style="color:{bc_phys}">Bright amber '
+            f'edges</span> are the strongest J[i,j]; the faint mesh is weaker '
+            f'top-K couplings. A circuit diagram, not a landscape.'
+            f'</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    with phys_chart_col:
+        phys_cfg = {
+            "displayModeBar": True,
+            "modeBarButtonsToRemove": [
+                "toImage", "sendDataToCloud",
+                "select2d", "lasso2d", "autoScale2d",
+                "toggleSpikelines",
+                "hoverClosestCartesian",
+                "hoverCompareCartesian",
+            ],
+            "displaylogo": False,
+            "staticPlot": False,
+        }
+        if data and tokens and len(tokens) > 1:
+            # Native Plotly animation — cached like the Animated Generation tab
+            # (figures with frames can't be st.cache_data'd, so use session_state)
+            phys_key = f"physanim_{selected}_{backend}_{alpha}_{k_edges}"
+            if phys_key not in st.session_state:
+                with st.spinner("Pre-computing coupling-network frames..."):
+                    st.session_state[phys_key] = build_physics_animated_figure(
+                        tokens, alpha=alpha, backend=backend, k=k_edges
+                    )
+            fig_p = st.session_state[phys_key]
+        else:
+            fig_p = build_physics_figure(record, alpha=alpha,
+                                         backend=backend, k=k_edges)
+        st.plotly_chart(fig_p, **_fill_width(st.plotly_chart),
+                        config=phys_cfg, key="physics_chart")
 
 with tab_explainer:
     st.markdown("""
@@ -1022,6 +1478,14 @@ The token labels show which vocabulary tokens sit at the bottom of each
 energy well, with their probability. The deepest well (▶ highlighted) is
 the token the model chose. The shallower wells are the alternatives it
 considered — real tokens, real probabilities, from the real model.
+<br><br>
+
+<b style="color:#f2a050">Energy View vs Physics View</b><br>
+Energy View shows the probability landscape. Physics View shows the physical
+coupling network a real TSU chip would use to sample it. Same data, two lenses.
+The Physics View tab renders the identical J matrix as a coupling graph —
+nodes are token positions, edges are the strongest couplings J[i,j], and the
+bright hub nodes are the attention sinks the network settles around.
 <br><br>
 
 <b style="color:#f2a050">Alpha (α)</b><br>
