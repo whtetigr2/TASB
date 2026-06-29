@@ -51,10 +51,10 @@ import sys
 import pytest
 import torch
 
-pytestmark = pytest.mark.slow
-
 from thermobridge import LlamaAttentionCapture, sample, SamplerConfig
 from thermobridge import LlamaAttentionInjector, DispatchEntry
+
+pytestmark = pytest.mark.slow
 
 
 def _c(code, t): return f"\033[{code}m{t}\033[0m"

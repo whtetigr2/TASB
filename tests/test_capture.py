@@ -53,10 +53,10 @@ import numpy as np
 import pytest
 import torch
 
-pytestmark = pytest.mark.slow
-
 from thermobridge import LlamaAttentionCapture, LayerCapture
 from thermobridge.capture import _ROTARY_PARAMS, _EAGER_PARAMS
+
+pytestmark = pytest.mark.slow
 
 
 def _c(code, t): return f"\033[{code}m{t}\033[0m"
