@@ -54,7 +54,7 @@ not as masked_fill in probability space.
 
 import inspect
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -467,7 +467,7 @@ class LlamaAttentionCapture:
 
     def summary(self) -> str:
         lines = [
-            f"LlamaAttentionCapture summary:",
+            "LlamaAttentionCapture summary:",
             f"  layers_to_capture: {self.config.layers_to_capture}",
             f"  rope calls observed:  {self.n_rope_calls}",
             f"  eager calls observed: {self.n_eager_calls}",

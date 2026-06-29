@@ -49,7 +49,6 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-import numpy as np
 import torch
 
 from transformers.models.llama.modeling_llama import repeat_kv as _repeat_kv
@@ -269,7 +268,6 @@ def _sample_rbm(logits: torch.Tensor,
     This is a research backend. Production uses `exact` or `gumbel`.
     """
     K = config.K
-    steps = config.rbm_steps
     B, n_q, S, _ = logits.shape
 
     generator = None

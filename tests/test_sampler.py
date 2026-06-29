@@ -45,11 +45,11 @@ T9 end-to-end with real capture (if model available):
 """
 
 import math
-import numpy as np
+import sys
+
 import torch
 
 from thermobridge import LayerCapture, LlamaAttentionCapture, sample, SamplerConfig
-from thermobridge.sampler import VALID_BACKENDS
 
 
 def _c(code, t): return f"\033[{code}m{t}\033[0m"
@@ -143,7 +143,7 @@ def test_t4_backend_equivalence():
     print(f"  mean abs diff: {mean_diff:.4f}")
     # K=5000 → SE ≈ 0.014, allow 3.5 SE for 99% headroom
     assert max_diff < 0.05, f"backend_equivalence failed: max diff {max_diff:.4f}"
-    print(green(f"  ✓ T4 PASS — exact and gumbel agree at K=5000\n"))
+    print(green("  ✓ T4 PASS — exact and gumbel agree at K=5000\n"))
 
 
 def test_t5_reproducibility():
@@ -227,7 +227,7 @@ def test_t8_config_validation():
     # Valid config works
     cfg = SamplerConfig(backend='exact', K=10)
     assert cfg.backend == 'exact'
-    print(f"  valid config accepts ✓")
+    print("  valid config accepts ✓")
     print(green("  ✓ T8 PASS\n"))
 
 

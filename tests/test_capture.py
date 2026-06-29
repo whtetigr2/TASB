@@ -47,6 +47,8 @@ loudly when something foundational breaks. Run before every Stage 1 change.
 ==============================================================================
 """
 
+import sys
+
 import numpy as np
 import torch
 
@@ -235,7 +237,7 @@ def test_t5_strict_verify_failure_path(model, tok):
         capturer.verify_capture()
     except RuntimeError as e:
         raised = True
-        print(f"  verify_capture raised as expected:")
+        print("  verify_capture raised as expected:")
         print(f"  {str(e).splitlines()[0]}")
 
     assert raised, "verify_capture did not raise on corrupted state!"

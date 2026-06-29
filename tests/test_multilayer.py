@@ -468,8 +468,8 @@ class TestMultilayerRefactor(unittest.TestCase):
                 f"result.{field_name} keys {list(field_val.keys())} "
                 f"!= [{LAYER_IDX}] on scalar call")
 
-        print(f"    PASS: scalar fields populated, dict fields are "
-              f"single-entry {{18: ...}}")
+        print("    PASS: scalar fields populated, dict fields are "
+              "single-entry {18: ...}")
 
     # ── Test 15: per_layer_seeds order independent ───────────────────────
     def test_15_per_layer_seeds_order_independent(self):

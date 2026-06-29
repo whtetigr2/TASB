@@ -46,10 +46,11 @@ alpha_zero_identity ✓.
 ==============================================================================
 """
 
-import numpy as np
+import sys
+
 import torch
 
-from thermobridge import LlamaAttentionCapture, LayerCapture, sample, SamplerConfig
+from thermobridge import LlamaAttentionCapture, sample, SamplerConfig
 from thermobridge import LlamaAttentionInjector, DispatchEntry
 
 
@@ -157,7 +158,7 @@ def test_t2_alpha_one_replaces_attention(model, tok):
     max_diff = diff.max().item()
     mean_diff = diff.mean().item()
 
-    print(f"  vanilla vs α=1 patched:")
+    print("  vanilla vs α=1 patched:")
     print(f"    max abs diff:  {max_diff:.4e}")
     print(f"    mean abs diff: {mean_diff:.4e}")
     print(f"  injector calls:      {injector.n_eager_calls}")
@@ -211,7 +212,7 @@ def test_t3_non_target_layers_untouched(model, tok):
     else:
         max_diff = (vanilla_l0.float() - during_l0.float()).abs().max().item()
 
-    print(f"  L0 vanilla vs L0 during L18-injection:")
+    print("  L0 vanilla vs L0 during L18-injection:")
     print(f"    torch.equal: {bit_exact}")
     print(f"    max diff:    {max_diff:.2e}")
 
@@ -235,7 +236,7 @@ def test_t4_shape_contract_validation(model, tok):
             {cap.layer_idx: DispatchEntry(capture=cap, p_thermo=wrong_shape, alpha=0.3)})
     except ValueError as e:
         raised = True
-        print(f"  wrong-shape p_thermo raises: ✓")
+        print("  wrong-shape p_thermo raises: ✓")
         print(f"    {e}")
 
     assert raised, "wrong-shape p_thermo did not raise"
@@ -247,7 +248,7 @@ def test_t4_shape_contract_validation(model, tok):
             {cap.layer_idx: DispatchEntry(capture=cap, p_thermo=[1, 2, 3], alpha=0.3)})
     except TypeError as e:
         raised = True
-        print(f"  non-tensor p_thermo raises: ✓")
+        print("  non-tensor p_thermo raises: ✓")
         print(f"    {e}")
     assert raised, "non-tensor p_thermo did not raise"
     print(green("  ✓ T4 PASS — shape and type guards fire\n"))

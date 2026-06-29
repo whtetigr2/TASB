@@ -27,11 +27,11 @@ HARDWARE HANDOFF: sample_states() → chip.sample() for TSU hardware.
 ==============================================================================
 """
 
-import warnings
-from typing import Optional
+import warnings  # noqa: E402
+from typing import Optional  # noqa: E402
 
-import torch
-import numpy as np
+import torch  # noqa: E402
+import numpy as np  # noqa: E402
 
 try:
     import jax
@@ -40,7 +40,6 @@ try:
         CategoricalNode,
         Block,
         BlockGibbsSpec,
-        BlockSamplingProgram,
         FactorSamplingProgram,
         SamplingSchedule,
         sample_states,
@@ -274,7 +273,7 @@ if __name__ == "__main__":
         print("  THRML not installed. Run: pip install thrml")
         raise SystemExit(1)
 
-    print(f"  THRML:  available")
+    print("  THRML:  available")
     print(f"  DLPack: {DLPACK_AVAILABLE}")
     print(f"  JAX:    {jax.devices()}")
     print()
@@ -319,7 +318,7 @@ if __name__ == "__main__":
     expected  = jax.nn.softmax(J, axis=-1)
     max_err   = float(jnp.abs(empirical - expected).max())
 
-    print(f"  Empirical (500 samples) vs expected softmax:")
+    print("  Empirical (500 samples) vs expected softmax:")
     for i in range(S):
         e = [f"{empirical[i,j]:.3f}" for j in range(S)]
         x = [f"{expected[i,j]:.3f}" for j in range(S)]

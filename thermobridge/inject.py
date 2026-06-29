@@ -34,13 +34,12 @@ even if an exception propagates during the forward pass.
 
 import inspect
 from contextlib import contextmanager
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 
 from transformers.models.llama import modeling_llama as _llama_mod
 from transformers.models.llama.modeling_llama import (
-    LlamaAttention as _LlamaAttention,
     repeat_kv as _repeat_kv,
 )
 
