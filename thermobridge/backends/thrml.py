@@ -320,8 +320,8 @@ if __name__ == "__main__":
 
     print("  Empirical (500 samples) vs expected softmax:")
     for i in range(S):
-        e = [f"{empirical[i,j]:.3f}" for j in range(S)]
-        x = [f"{expected[i,j]:.3f}" for j in range(S)]
+        e = [f"{empirical[i, j]:.3f}" for j in range(S)]
+        x = [f"{expected[i, j]:.3f}" for j in range(S)]
         print(f"    Q{i}: got {e}  exp {x}")
 
     print(f"  Max error: {max_err:.4f}")
