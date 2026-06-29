@@ -1,10 +1,21 @@
 # thermobridge
 
 [![CI](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml/badge.svg)](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml)
+[![Demo](https://img.shields.io/badge/🤗%20Space-thermobridge-blue)](https://huggingface.co/spaces/shvrpws/thermobridge)
 [![Patent Pending](https://img.shields.io/badge/patent-pending-blue)](https://patents.google.com/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
 Thermodynamic attention sampling bridge for frozen transformer models. Replaces softmax attention weights with Boltzmann-sampled distributions drawn from the same energy landscape — no fine-tuning, no architectural changes, no retraining.
+
+---
+
+## Interactive Demo
+
+[**Try it on Hugging Face Spaces →**](https://huggingface.co/spaces/shvrpws/thermobridge)
+
+The demo has two tabs:
+- **Synthetic (CPU)** — explore the Boltzmann-softmax equivalence on controlled energy matrices, adjust K to watch 1/K convergence live
+- **Full Pipeline (GPU)** — real LLaMA 3.2-3B inference with bridge-sampled attention (GPU Space required)
 
 ---
 
