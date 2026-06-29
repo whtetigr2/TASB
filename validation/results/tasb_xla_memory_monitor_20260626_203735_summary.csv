@@ -1,0 +1,2 @@
+pass,mean_vram_mb,std_vram_mb,max_vram_mb,min_vram_mb,slope_mb_per_tok,max_deviation_pct
+True,2459.4,4.2,2467.0,2455.0,0.638,0.3

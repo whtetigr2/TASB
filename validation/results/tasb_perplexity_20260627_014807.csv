@@ -1,0 +1,6 @@
+condition,backend,alpha,K,n_chunks,mean_nll,ppl,elapsed_s,chunk_t_mean
+vanilla,none,0.0,0,564,2.323318,10.2095,108.04,0.1916
+exact-K10,exact,0.3,10,564,2.324439,10.2209,220.14,0.3903
+exact-K50,exact,0.3,50,564,2.323495,10.2113,220.93,0.3917
+thrml-K50,thrml,0.3,50,25,2.304004,10.0142,40.18,1.6073
+vanilla-subset,none,0.0,0,25,2.303454,10.0087,4.77,0.1908

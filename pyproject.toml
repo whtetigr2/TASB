@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "thermobridge"
+version = "0.1.0"
+description = "Thermodynamic attention sampling bridge for frozen transformer models"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Paul W. Shaver", email = "whtetigr2@gmail.com" }]
+keywords = ["transformers", "attention", "boltzmann", "thermodynamic computing", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.40",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+thrml = ["thrml", "jax[cuda12]", "equinox"]
+dev   = ["pytest>=8", "flake8", "pre-commit"]
+
+[project.urls]
+Repository = "https://github.com/whtetigr2/thermobridge"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["thermobridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
