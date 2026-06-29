@@ -50,7 +50,10 @@ loudly when something foundational breaks. Run before every Stage 1 change.
 import sys
 
 import numpy as np
+import pytest
 import torch
+
+pytestmark = pytest.mark.slow
 
 from thermobridge import LlamaAttentionCapture, LayerCapture
 from thermobridge.capture import _ROTARY_PARAMS, _EAGER_PARAMS

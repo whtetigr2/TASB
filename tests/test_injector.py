@@ -48,7 +48,10 @@ alpha_zero_identity ✓.
 
 import sys
 
+import pytest
 import torch
+
+pytestmark = pytest.mark.slow
 
 from thermobridge import LlamaAttentionCapture, sample, SamplerConfig
 from thermobridge import LlamaAttentionInjector, DispatchEntry

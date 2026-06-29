@@ -48,7 +48,10 @@ or:
 import sys
 import unittest
 
+import pytest
 import torch
+
+pytestmark = pytest.mark.slow
 
 # ---------------------------------------------------------------------------
 # Constants
