@@ -1,6 +1,6 @@
 # thermobridge
 
-[![CI](https://github.com/whtetigr2/thermobridge/actions/workflows/ci.yml/badge.svg)](https://github.com/whtetigr2/thermobridge/actions/workflows/ci.yml)
+[![CI](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml/badge.svg)](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml)
 [![Patent Pending](https://img.shields.io/badge/patent-pending-blue)](https://patents.google.com/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
@@ -99,7 +99,7 @@ If you use thermobridge in your research, please cite:
   title     = {thermobridge: Thermodynamic Attention Sampling for Frozen Transformers},
   year      = {2026},
   publisher = {GitHub},
-  url       = {https://github.com/whtetigr2/thermobridge}
+  url       = {https://github.com/whtetigr2/TASB}
 }
 
 @patent{shaver2026provisional,

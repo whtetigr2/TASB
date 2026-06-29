@@ -3,7 +3,7 @@
 ## Getting started
 
 ```bash
-git clone https://github.com/whtetigr2/thermobridge
+git clone https://github.com/whtetigr2/TASB
 cd thermobridge
 pip install -e ".[dev]"
 pre-commit install

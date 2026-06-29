@@ -32,7 +32,7 @@ thrml = ["thrml", "jax[cuda12]", "equinox"]
 dev   = ["pytest>=8", "flake8", "pre-commit"]
 
 [project.urls]
-Repository = "https://github.com/whtetigr2/thermobridge"
+Repository = "https://github.com/whtetigr2/TASB"
 
 [tool.setuptools.packages.find]
 where = ["."]
