@@ -653,7 +653,46 @@ footer { display: none !important; }
 
 
 # ---------------------------------------------------------------------------
-# Header HTML — gold glow wordmark
+# Hero HTML — animated canvas (THERMOBRIDGE crystallising from energy landscape)
+# Script-free; animation JS is injected via GIBBS_JS (js= param of gr.Blocks)
+# ---------------------------------------------------------------------------
+
+HERO_HTML = """
+<div style="
+    text-align:center;
+    padding:0 0 0;
+    border-bottom:1px solid #2a1500;
+    margin-bottom:4px;
+    background:#0a0600;
+">
+  <canvas id="tbhc" style="width:100%;height:200px;display:block;"></canvas>
+  <div style="
+      font-family:'Courier New',monospace;
+      font-size:11px;
+      color:#aa7744;
+      letter-spacing:0.24em;
+      text-transform:uppercase;
+      margin-bottom:10px;
+  ">thermodynamic attention sampling &nbsp;·&nbsp; boltzmann vs softmax</div>
+  <div style="
+      font-family:monospace;
+      font-size:10px;
+      color:#7a5533;
+      letter-spacing:0.08em;
+      padding-bottom:20px;
+  ">
+    Patent Pending &nbsp;·&nbsp; USPTO Provisional 64/019,999 &nbsp;·&nbsp;
+    <a href="https://github.com/whtetigr2/TASB"
+       style="color:#aa7744;text-decoration:none;border-bottom:1px solid #553322;">
+      GitHub ↗
+    </a>
+  </div>
+</div>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Header HTML — gold glow wordmark (kept as fallback / reference)
 # ---------------------------------------------------------------------------
 
 HEADER_HTML = """
@@ -756,6 +795,129 @@ LLAMA_HEADER_HTML = """
 
 GIBBS_JS = """
 () => {
+    // ── Hero canvas: THERMOBRIDGE crystallising from energy landscape ─────
+    (function(){
+      var hGen = (window.__tbHGen = (window.__tbHGen||0)+1);
+      function tryHero(){
+        var cv = document.getElementById('tbhc');
+        if(!cv || cv.offsetWidth < 10){ requestAnimationFrame(tryHero); return; }
+        tbHero(cv, hGen);
+      }
+      requestAnimationFrame(tryHero);
+
+      function tbHero(canvas, gen){
+        var ctx = canvas.getContext('2d');
+        var LOOP = 9000;
+        var t0 = null, W, H, dots, parts, rTimer;
+
+        function lY(x, off){
+          return H*0.72
+            + Math.sin(x/W*Math.PI*3 + off)*H*0.07
+            + Math.sin(x/W*Math.PI*7 + off*1.4)*H*0.03
+            + Math.sin(x/W*Math.PI*1.5 + off*0.6)*H*0.05;
+        }
+
+        function getDots(){
+          var oc=document.createElement('canvas'); oc.width=W; oc.height=H;
+          var ox=oc.getContext('2d');
+          var fs=Math.min(H*0.48, W/9.5);
+          ox.fillStyle='#fff';
+          ox.font='900 '+fs+'px "Courier New",monospace';
+          ox.textAlign='center'; ox.textBaseline='middle';
+          ox.fillText('THERMOBRIDGE', W/2, H/2);
+          var d=ox.getImageData(0,0,W,H).data, res=[];
+          var step=Math.max(5,Math.round(fs/10));
+          for(var y=0;y<H;y+=step) for(var x=0;x<W;x+=step)
+            if(d[(y*W+x)*4+3]>100)
+              res.push({x:x+(Math.random()-.5)*step*.4,
+                        y:y+(Math.random()-.5)*step*.4});
+          return res;
+        }
+
+        function build(){
+          W=canvas.offsetWidth||900; H=200;
+          canvas.width=W; canvas.height=H;
+          dots=getDots(); parts=[];
+          var n=dots.length+80;
+          for(var i=0;i<n;i++){
+            var L=i<dots.length, bx=Math.random()*W, ph=Math.random()*Math.PI*2;
+            parts.push({bx:bx,by:0,ph:ph,
+              tx:L?dots[i].x:bx, ty:L?dots[i].y:0,
+              cx:bx,cy:0,sz:1.4+Math.random()*1.6,
+              al:0.35+Math.random()*0.65,L:L});
+          }
+        }
+        build();
+
+        window.addEventListener('resize', function(){
+          if(window.__tbHGen!==gen) return;
+          clearTimeout(rTimer);
+          rTimer=setTimeout(function(){build();},200);
+        });
+
+        function ease(t){return t<.5?2*t*t:-1+(4-2*t)*t;}
+        function lerp(a,b,t){return a+(b-a)*t;}
+
+        function frame(ts){
+          if(window.__tbHGen!==gen) return;
+          requestAnimationFrame(frame);
+          if(!t0) t0=ts;
+          var el=(ts-t0)%LOOP, prog=el/LOOP, toff=el/2000;
+          var mode,bl;
+          if(prog<0.12)      {mode=0;bl=1;}
+          else if(prog<0.42) {mode=1;bl=ease((prog-.12)/.30);}
+          else if(prog<0.62) {mode=2;bl=1;}
+          else if(prog<0.82) {mode=3;bl=ease((prog-.62)/.20);}
+          else               {mode=0;bl=1;}
+
+          ctx.fillStyle='#0a0600'; ctx.fillRect(0,0,W,H);
+
+          var i,p;
+          for(i=0;i<parts.length;i++){
+            p=parts[i]; p.by=lY(p.bx,p.ph+toff);
+            if(!p.L) p.ty=p.by;
+            if(mode===0)      {p.cx=p.bx;p.cy=p.by;}
+            else if(mode===1) {p.cx=p.L?lerp(p.bx,p.tx,bl):p.bx; p.cy=p.L?lerp(p.by,p.ty,bl):p.by;}
+            else if(mode===2) {p.cx=p.L?p.tx:p.bx; p.cy=p.L?p.ty:p.by;}
+            else              {p.cx=p.L?lerp(p.tx,p.bx,bl):p.bx; p.cy=p.L?lerp(p.ty,p.by,bl):p.by;}
+          }
+
+          // Connections (capped at 600)
+          var MAX=600,drawn=0,D2=70*70; ctx.lineWidth=0.6;
+          outer:for(var a=0;a<parts.length;a++){
+            var pa=parts[a];
+            for(var b=a+1;b<parts.length;b++){
+              if(drawn>=MAX) break outer;
+              var pb=parts[b], dx=pa.cx-pb.cx, dy=pa.cy-pb.cy, d2=dx*dx+dy*dy;
+              if(d2<D2){
+                ctx.strokeStyle='rgba(204,119,0,'+(1-Math.sqrt(d2)/70)*.32+')';
+                ctx.beginPath();ctx.moveTo(pa.cx,pa.cy);ctx.lineTo(pb.cx,pb.cy);ctx.stroke();
+                drawn++;
+              }
+            }
+          }
+
+          // Particles with radial glow
+          var pulse=mode===2?Math.sin(toff*6)*.2:0;
+          for(i=0;i<parts.length;i++){
+            p=parts[i];
+            var al=Math.min(1,p.al+(p.L&&mode===2?pulse:0));
+            var r=p.sz*(1+(p.L&&mode===2?pulse*.4:0));
+            var gr=ctx.createRadialGradient(p.cx,p.cy,0,p.cx,p.cy,r*5);
+            gr.addColorStop(0,'rgba(255,200,80,'+al+')');
+            gr.addColorStop(.4,'rgba(204,119,0,'+(al*.35)+')');
+            gr.addColorStop(1,'rgba(0,0,0,0)');
+            ctx.fillStyle=gr;
+            ctx.beginPath();ctx.arc(p.cx,p.cy,r*5,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle='rgba(255,220,100,'+al+')';
+            ctx.beginPath();ctx.arc(p.cx,p.cy,r,0,Math.PI*2);ctx.fill();
+          }
+        }
+        requestAnimationFrame(frame);
+      }
+    })();
+
+    // ── Gibbs chain animation ─────────────────────────────────────────────
     window.__tcGen = 0;
 
     window.startGibbsAnim = function(root) {
@@ -1200,7 +1362,7 @@ with gr.Blocks(
     js=GIBBS_JS,
 ) as demo:
 
-    gr.HTML(HEADER_HTML)
+    gr.HTML(HERO_HTML)
 
     with gr.Tabs():
 
