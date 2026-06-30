@@ -3,8 +3,9 @@ thermobridge — Gradio demo
 https://github.com/whtetigr2/TASB
 
 Tab 1: Synthetic Boltzmann Bridge — CPU animated Gibbs chain + interactive Plotly.
-Tab 2: Real LLaMA Profile — measured thermodynamic landscape, LLaMA 3.2-3B on A100.
-Tab 3: About / Whitepaper.
+Tab 2: Real Attention Viewer — actual per-token softmax attention matrices, all 5 prompts.
+Tab 3: Real LLaMA Profile — measured thermodynamic landscape, LLaMA 3.2-3B on A100.
+Tab 4: About / Whitepaper.
 
 © 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
 """
@@ -36,6 +37,21 @@ except Exception as _err:
     _PROMPTS_AVAIL = ["factual", "code", "reasoning", "creative", "mathematical"]
     _DATA_OK = False
     print(f"[demo] Sweep data not loaded: {_err}")
+
+# Attention matrices (S×S per head/layer) — from tasb_attention_capture.py
+_ATTN_DATA_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "attention_matrices.json"
+)
+try:
+    with open(_ATTN_DATA_PATH) as _f:
+        _attn_data = json.load(_f)
+    _ATTN_PROMPTS = list(_attn_data.keys())
+    _ATTN_OK = True
+except Exception as _err:
+    _attn_data = None
+    _ATTN_PROMPTS = ["factual", "code", "reasoning", "creative", "mathematical"]
+    _ATTN_OK = False
+    print(f"[demo] Attention matrices not loaded: {_err}")
 
 PROMPT_COLORS = {
     "factual":      "#ffaa00",
@@ -72,6 +88,14 @@ METRIC_DESC = {
     "kl":      "KL(softmax ‖ p_thermo) at K=10 — finite-sample fidelity error",
     "entropy": "Shannon entropy H = −Σ p log p of softmax (nats)",
     "p_max":   "max(softmax) — attention concentration per head",
+}
+
+PROMPT_TEXT = {
+    "factual":      "The capital of France is Paris. The capital of Germany is",
+    "code":         "def fibonacci(n): if n <= 1: return n else: return fibonacci",
+    "reasoning":    "All mammals are warm-blooded. Whales are mammals. Therefore,",
+    "creative":     "In the year 2150, when gravity was finally understood as",
+    "mathematical": "The Riemann zeta function zeta(s) has non-trivial zeros at s =",
 }
 
 
@@ -457,6 +481,76 @@ def make_scatter_fig() -> go.Figure:
         **_PLOT_BASE,
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Tab 2 — Real Attention Viewer (per-token S×S matrices)
+# ---------------------------------------------------------------------------
+
+def make_attention_matrix_fig(prompt_id: str, layer: int, head: int) -> go.Figure:
+    """Softmax attention heatmap with real token strings on both axes."""
+    if _attn_data is None:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(
+                text="Attention matrices not yet loaded — capture still running on Lightning.ai",
+                font=dict(color="#cc8800", size=12),
+            ),
+            **_PLOT_BASE,
+            height=500,
+        )
+        return fig
+
+    data   = _attn_data[prompt_id]
+    tokens = data["tokens"]
+    mat    = np.array(data["layers"][str(layer)]["heads"][str(head)])  # (S, S)
+    label  = PROMPT_LABELS.get(prompt_id, prompt_id)
+
+    fig = go.Figure(go.Heatmap(
+        z=mat,
+        x=tokens,
+        y=tokens,
+        colorscale="Plasma",
+        hovertemplate=(
+            "Query:  <b>%{y}</b><br>"
+            "Key:    <b>%{x}</b><br>"
+            "p(attn) = %{z:.4f}<extra></extra>"
+        ),
+        colorbar=dict(
+            thickness=14,
+            title=dict(text="p(attn)", font=dict(color="#886633", size=9)),
+            tickfont=dict(color="#886633", size=9),
+            outlinecolor="#2a1500",
+        ),
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Softmax attention matrix  ·  {label}  ·  Layer {layer}  ·  Head {head}",
+            font=dict(color="#cc8800", size=12),
+        ),
+        xaxis=dict(
+            title="Key token (attended to →)",
+            tickfont=dict(color="#c4944a", size=10),
+            tickangle=-40,
+            gridcolor="#1a0e00",
+        ),
+        yaxis=dict(
+            title="← Query token (attending from)",
+            tickfont=dict(color="#c4944a", size=10),
+            gridcolor="#1a0e00",
+            autorange="reversed",
+        ),
+        height=520,
+        **_PLOT_BASE,
+    )
+    return fig
+
+
+def update_attention_viewer(prompt_id: str, layer: int, head: int):
+    fig  = make_attention_matrix_fig(prompt_id, int(layer), int(head))
+    text = f"**Prompt:** `{PROMPT_TEXT.get(prompt_id, prompt_id)}`"
+    return fig, text
 
 
 # ---------------------------------------------------------------------------
@@ -1154,7 +1248,42 @@ with gr.Blocks(
             plot_out  = gr.Plot(label="Analysis (interactive)")
             stats_out = gr.Markdown()
 
-        # ── Tab 2: Real LLaMA Profile ─────────────────────────────────────────
+        # ── Tab 2: Real Attention Viewer ─────────────────────────────────────
+        with gr.Tab("Real Attention Viewer"):
+            gr.Markdown(
+                "Actual per-token softmax attention matrices from frozen **LLaMA 3.2-3B** "
+                "captured on A100 — real tokenization, real weights, no synthetic data. "
+                "Token strings from real tokenization appear on both axes so you can see "
+                "exactly which tokens attend to which tokens at every layer and head."
+            )
+
+            with gr.Row():
+                attn_prompt_sel = gr.Radio(
+                    choices=_ATTN_PROMPTS,
+                    value=_ATTN_PROMPTS[0] if _ATTN_PROMPTS else "factual",
+                    label="Prompt",
+                    info="5 linguistic domains — each shows different attention structure",
+                )
+                with gr.Column():
+                    attn_layer_sel = gr.Slider(
+                        0, 27, value=9, step=1,
+                        label="Layer",
+                        info="Layer 9 = peak thermodynamic activity (highest mean Cv across prompts)",
+                    )
+                    attn_head_sel = gr.Slider(
+                        0, 23, value=0, step=1,
+                        label="Head",
+                        info="24 heads per layer — each specializes in different token relationships",
+                    )
+
+            attn_prompt_text = gr.Markdown(
+                f"**Prompt:** `{PROMPT_TEXT.get(_ATTN_PROMPTS[0] if _ATTN_PROMPTS else 'factual', '')}`"
+            )
+            attn_matrix_out = gr.Plot(
+                label="Attention matrix — hover any cell for exact token pair + weight"
+            )
+
+        # ── Tab 3: Real LLaMA Profile ─────────────────────────────────────────
         with gr.Tab("Real LLaMA Profile"):
             gr.HTML(LLAMA_HEADER_HTML)
             gr.Markdown(
@@ -1183,7 +1312,7 @@ with gr.Blocks(
                 profile_out = gr.Plot(label="Layer Cv profile — all 5 prompts")
                 scatter_out = gr.Plot(label="Cv × KL scatter — layer 18  (r = 0.8241)")
 
-        # ── Tab 3: About ──────────────────────────────────────────────────────
+        # ── Tab 4: About ──────────────────────────────────────────────────────
         with gr.Tab("About / Whitepaper"):
             gr.Markdown(ABOUT_MD)
 
@@ -1193,22 +1322,33 @@ with gr.Blocks(
 
     run_btn.click(fn=run_demo, inputs=_t1_inputs, outputs=_t1_outputs)
 
-    # ── Tab 2 event wiring ────────────────────────────────────────────────────
+    # ── Tab 2 event wiring (Real Attention Viewer) ───────────────────────────
+    _attn_inputs  = [attn_prompt_sel, attn_layer_sel, attn_head_sel]
+    _attn_outputs = [attn_matrix_out, attn_prompt_text]
+
+    attn_prompt_sel.change(fn=update_attention_viewer, inputs=_attn_inputs, outputs=_attn_outputs)
+    attn_layer_sel.change(fn=update_attention_viewer,  inputs=_attn_inputs, outputs=_attn_outputs)
+    attn_head_sel.change(fn=update_attention_viewer,   inputs=_attn_inputs, outputs=_attn_outputs)
+
+    # ── Tab 3 event wiring (Real LLaMA Profile) ──────────────────────────────
     prompt_sel.change(fn=update_llama_tab, inputs=[prompt_sel, metric_sel], outputs=[heatmap_out])
     metric_sel.change(fn=update_llama_tab, inputs=[prompt_sel, metric_sel], outputs=[heatmap_out])
 
-    # ── Page load: initialize both tabs ──────────────────────────────────────
+    # ── Page load: initialize all tabs ───────────────────────────────────────
     def _on_load(seq_len, K, backend, energy, temp, seed, speed):
-        t1 = run_demo(seq_len, K, backend, energy, temp, seed, speed)
+        t1       = run_demo(seq_len, K, backend, energy, temp, seed, speed)
+        attn_fig, attn_txt = update_attention_viewer(
+            _ATTN_PROMPTS[0] if _ATTN_PROMPTS else "factual", 9, 0
+        )
         hm = make_heatmap_fig(_PROMPTS_AVAIL[0] if _PROMPTS_AVAIL else "factual", "cv")
         lp = make_layer_profile_fig()
         sc = make_scatter_fig()
-        return (*t1, hm, lp, sc)
+        return (*t1, attn_fig, attn_txt, hm, lp, sc)
 
     demo.load(
         fn=_on_load,
         inputs=_t1_inputs,
-        outputs=[*_t1_outputs, heatmap_out, profile_out, scatter_out],
+        outputs=[*_t1_outputs, attn_matrix_out, attn_prompt_text, heatmap_out, profile_out, scatter_out],
     )
 
 if __name__ == "__main__":
