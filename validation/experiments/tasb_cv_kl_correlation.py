@@ -111,7 +111,7 @@ def cv_per_head(logits: torch.Tensor) -> np.ndarray:
     for h in range(n_q):
         log_h = logits[0, h, 1:, :]
         p_h   = p[0,   h, 1:, :]
-        log_h = log_h.masked_fill(~torch.isfinite(log_h), 0.0)
+        log_h = log_h.clamp(min=-1e9)  # HF causal sentinel (~-3.4e38) overflows float32 when squared
         E1 = (p_h * log_h).sum(-1)
         E2 = (p_h * log_h**2).sum(-1)
         cv[h] = (E2 - E1**2).mean().item()

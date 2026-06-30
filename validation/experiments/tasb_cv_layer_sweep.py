@@ -132,7 +132,7 @@ def compute_cv_per_head(capture) -> np.ndarray:
     for h in range(n_q):
         log_h = logits[0, h, 1:, :]   # (S-1, S) — skip position 0
         p_h   = p[0,   h, 1:, :]      # (S-1, S)
-        log_h = log_h.masked_fill(~torch.isfinite(log_h), 0.0)  # causal mask -inf → 0
+        log_h = log_h.clamp(min=-1e9)  # HF causal sentinel (~-3.4e38) overflows float32 when squared
         E_a   = (p_h * log_h).sum(-1)       # (S-1,)
         E_a2  = (p_h * log_h**2).sum(-1)    # (S-1,)
         cv_heads[h] = (E_a2 - E_a**2).mean().item()
