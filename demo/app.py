@@ -826,7 +826,7 @@ GIBBS_JS = """
           ox.textAlign='center'; ox.textBaseline='middle';
           ox.fillText('THERMOBRIDGE', W/2, H/2);
           var d=ox.getImageData(0,0,W,H).data, res=[];
-          var step=Math.max(5,Math.round(fs/10));
+          var step=Math.max(4,Math.round(fs/15));
           for(var y=0;y<H;y+=step) for(var x=0;x<W;x+=step)
             if(d[(y*W+x)*4+3]>100)
               res.push({x:x+(Math.random()-.5)*step*.4,
