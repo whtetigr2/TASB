@@ -1,4 +1,4 @@
-gradio>=4.44
+audioop-lts; python_version >= "3.13"
 numpy>=1.24
-matplotlib>=3.7
-scipy>=1.11
+pandas>=2.0
+plotly>=5.0
