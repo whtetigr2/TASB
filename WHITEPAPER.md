@@ -647,7 +647,7 @@ Token strings on both axes. Viewable interactively in the
 | Kim (arXiv:2602.08216) | Feb 9, 2026 | Thermodynamic Lagrangian derivation | Theoretical foundation (Routes 1+3); no hardware bridge |
 | **TASB patent filing** | **Mar 28, 2026** | **Inference-time frozen-weight bridge** | **First implementation** |
 | Boltzmann Attention (arXiv:2606.12478) | Jun 23, 2026 | Learnable Ising couplings | Requires training; submitted 87 days after patent |
-| FAR (arXiv:2505.21535) | 2025 | BiLSTM distillation | Requires training; different architectural approach |
+| FAR (arXiv:2505.21535v4) | May 2026 | BiLSTM distillation | Requires training; different architectural approach |
 
 ### The Prior Art Gap
 
