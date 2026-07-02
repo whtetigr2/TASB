@@ -660,7 +660,32 @@ All results on LLaMA 3.2-3B (4-bit nf4), d_k=128, 24 heads, 28 layers, A100 GPU.
 | Layer-depth Cv ordering | Not confirmed (different regime from Kim) | ✗ STRUCK |
 | Gumbel backend Cv bias (π²/6) | Derivation error — not applicable | ✗ STRUCK |
 | Gap B: r(ΔCv, W_KL) = 0.549, p = 0.0055, n=24 heads | 21/24 heads ΔCv > 0 | ✅ PASS |
-| Multi-model validation | In progress | ⏳ PENDING |
+| Multi-model validation: r(H,KL) LLaMA→Phi-3 | 0.95→0.871 population; 0.93→0.821 mid-layer (K=10) | ✅ PASS |
+| Multi-model validation: r(Cv,KL) at K=10 | 0.82 (LLaMA L18) → 0.470 (Phi-3 L16) — FAIL; passes at K=25 (0.644) | ⚠️ PARTIAL |
+
+### Cross-Architecture Validation — Phi-3-mini-4k (EXP-004)
+
+Model: `microsoft/Phi-3-mini-4k-instruct` (full MHA, 32Q/32KV heads, head_dim=96,
+32 layers). Structural contrast with LLaMA 3.2-3B (24Q/8KV GQA, head_dim=128, 28
+layers). Scale: 5 prompts × 32 layers × 32 heads × 6 K-values = **30,720 observations**.
+
+**Key finding:** Shannon entropy of the attention distribution (H) is a robust,
+architecture-agnostic predictor of finite-K Boltzmann sampling error across two
+independent model families. Cv is architecture-sensitive at the K=10 production
+operating point; passes at K≥25.
+
+| K | r(H,KL) all layers | r(H,KL) mid-layer | r(Cv,KL) all | r(Cv,KL) mid-layer |
+|---|---------------------|-------------------|-------------|---------------------|
+| 1 | 0.831 | 0.739 | −0.040 | 0.066 |
+| 5 | 0.895 | 0.857 | 0.070 | 0.360 |
+| **10** | **0.871** | **0.821** | **0.184** | **0.470** |
+| 25 | 0.771 | 0.689 | 0.374 | 0.644 |
+| 50 | 0.638 | 0.599 | 0.493 | 0.679 |
+| 100 | 0.489 | 0.394 | 0.539 | 0.642 |
+
+The FIND-008 "single model family" skeptic objection is directly answered: two
+independent architectures, two organizations (Meta / Microsoft), different head
+topologies and temperatures. Entropy correlation robust in both.
 
 ### Attention Matrices: Real LLaMA Data
 
@@ -724,5 +749,4 @@ Any two of these three properties appear in prior work. All three together do no
 
 ---
 
-*Last updated: 2026-07-02. §3 KL measurements disambiguated (K=10 vs K=5000 vs production α=0.3). §4 entropy comparison added (r=0.93 vs Cv r=0.82 at L18; r=0.95 vs 0.61 population-wide). §8 updated.*
-*Remaining open: EXP-004 (multi-model validation, non-blocking).*
+*Last updated: 2026-07-02. §3 KL measurements disambiguated (K=10 vs K=5000 vs production α=0.3). §4 entropy comparison added (r=0.93 vs Cv r=0.82 at L18; r=0.95 vs 0.61 population-wide). §8 updated with EXP-004 cross-architecture validation (Phi-3-mini-4k, 30,720 observations). All planned experiments complete.*
