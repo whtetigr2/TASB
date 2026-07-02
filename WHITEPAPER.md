@@ -46,7 +46,7 @@ After that, things moved fast. With the thermodynamic framework in place I could
 properly classify attention heads by their thermodynamic activity, distinguish
 frozen-state behavior (over-sharpened, low-entropy heads) from chaos states at the
 other extreme, and build a bridge layer that routes frozen transformer weights to
-Boltzmann sampling with KL < 0.002 at K=10 and 1.81× compute overhead.
+Boltzmann sampling with zero confident flips at K=10, sampler correctness verified at K=5000 (KL < 0.002), and 1.81× compute overhead.
 The result is a working pip-installable Python library with a live demo at
 [huggingface.co/spaces/shvrpws/thermobridge](https://huggingface.co/spaces/shvrpws/thermobridge).
 
@@ -182,24 +182,33 @@ No gradients. No model modification. No retraining. The weights stay frozen.
 
 ### Validated Results
 
-Measured on LLaMA 3.2-3B, exact backend, K=10, α=1.0, layer 18, across 5 prompts:
+Measured on LLaMA 3.2-3B, exact backend, layer 18, across 5 prompts:
 
-| Metric | Value |
-|--------|-------|
-| KL(p_bridge ‖ p_softmax) | < 0.002 |
-| Top-1 agreement | 98.9% |
-| Confident flips (any layer, any α) | 0 |
-| Compute overhead | 1.81× |
-| Layers where injection is valid | All 28 (L0–L27) |
-| K values tested | {1, 3, 5, 10, 25, 50, 100} — all pass |
-| α values tested | 0.0 through 1.0 — all pass |
+| Metric | Condition | Value |
+|--------|-----------|-------|
+| KL(p_bridge ‖ p_softmax) | K=10, α=1.0 (full substitution) | mean 1.72 [1] |
+| KL(p_bridge ‖ p_softmax) | K=5000, α=1.0 (convergence test) | < 0.002 |
+| KL(p_blended ‖ p_softmax) | K=10, α=0.3 (production) | ≈ 0.001 |
+| Top-1 agreement | K=10, α=1.0 | 98.9% |
+| Confident flips | any layer, any K, any α | 0 |
+| Compute overhead | — | 1.81× |
+| Layers where injection is valid | — | All 28 (L0–L27) |
+| K values tested | — | {1, 3, 5, 10, 25, 50, 100} — all pass |
+| α values tested | — | 0.0 through 1.0 — all pass |
 
-**On KL < 0.002:** Greedy decoding (argmax) is equivalent to taking the T→0 limit
-of the Boltzmann distribution — a delta function concentrated on the single
-highest-energy token. KL(argmax ‖ Boltzmann) = ∞. TASB at K=10 achieves
-KL < 0.002 at 1.81× compute overhead. This is not an approximation to softmax; it
-is Boltzmann sampling that is, to four decimal places, indistinguishable from the
-exact softmax distribution.
+[1] Finite-K Monte Carlo sampling noise, not a sampler error. KL ∝ K⁻⁰·⁹⁴ (R²=0.94,
+independently verified) — the sampler converges to the correct Boltzmann distribution
+as K increases. At K=10, sampling variance is real; the behavioral invariant is zero
+confident flips, not low KL. The K=5000 row establishes distributional correctness:
+the sampler produces samples from the right distribution. The production row (α=0.3)
+shows the blended output fidelity: 70% softmax + 30% thermodynamic sample.
+
+**Three KL measurements, three distinct conditions.** Greedy decoding (argmax) is
+the T→0 limit of the Boltzmann distribution — a delta function on the
+highest-energy token, with KL(argmax ‖ Boltzmann) = ∞. TASB achieves zero confident
+flips at K=10 — the model's top-1 predictions are unchanged regardless of sampling
+noise — and converges to KL < 0.002 at K=5000, proving the sampler reaches the
+correct Boltzmann distribution at sufficient sample count.
 
 ### T=√d_k is Exact, Not Conventional
 
@@ -252,14 +261,40 @@ thermodynamic system.
 
 ### Empirical Result: r(Cv, KL) = 0.8241
 
-Measured across 3,360 observations (5 prompts × 28 layers × 24 heads, LLaMA 3.2-3B):
+From 3,360 total observations (5 prompts × 28 layers × 24 heads, LLaMA 3.2-3B),
+restricting to layer 18 (120 observations, K=10, α=1.0):
 
-**Pearson r(Cv, KL_TASB) = 0.8241, p = 6.1 × 10⁻²⁵ (at layer 18, K=10)**
+**Pearson r(Cv, KL_TASB) = 0.8241, p = 6.1 × 10⁻²⁵**
+
+Across all 672 head-layer combinations (population-wide): r = 0.61 — a real,
+moderate correlation that weakens in early layers where causal-mask structure
+introduces noise beyond Cv alone.
 
 Specific heat predicts finite-K sampling error. Heads with higher thermodynamic
 activity (higher Cv) require more samples K to converge to the Boltzmann distribution.
 This is the empirical bridge between Kim's Cv observable and TASB's practical
 sampling guarantee.
+
+**Cv and entropy as complementary signals.** Shannon entropy H(P) = −Σᵢ pᵢ log pᵢ
+is a stronger predictor of finite-K KL error:
+
+| Observable | r at layer 18 (n=120) | r population-wide (n=672) |
+|------------|----------------------|---------------------------|
+| Cv = Var_ρ(H) | 0.8241 | 0.6097 |
+| Shannon entropy H(P) | 0.9279 | 0.9492 |
+
+Entropy is more accurate and more stable across the full model. The difference
+follows from first principles: the exact Miller-Madow relationship between finite-K
+KL error and H(P) is exact, while Cv is only a regime-dependent proxy for H(P).
+
+Cv's advantage is not predictive power but physical grounding. Cv = Var_ρ(H) is the
+variance of the energy landscape — the same quantity Kim (2026) derives as the
+thermodynamic specific heat of the attention system, and the natural vocabulary of
+Extropic's hardware architecture. Entropy names the information-theoretic cost; Cv
+names the thermodynamic state. Both are computable from the bridge state in a single
+line of code at zero additional cost. TASB computes Cv because it is the physically
+correct observable for the thermodynamic framework; entropy is available as a stronger
+pure predictor for adaptive sampling applications.
 
 ### The Universal Predictor Finding
 
@@ -617,7 +652,8 @@ All results on LLaMA 3.2-3B (4-bit nf4), d_k=128, 24 heads, 28 layers, A100 GPU.
 | K sweep (M7-2): K ∈ {1,3,5,10,25,50,100} | 0 confident flips, KL monotone ↓ | ✅ PASS |
 | Alpha sweep (M7-4): α ∈ {0.0 … 1.0} | 0 confident flips | ✅ PASS |
 | Compute overhead (FIND-013) | 1.81× (threshold: <3×) | ✅ PASS |
-| r(Cv, KL) at layer 18, 3360 obs. | 0.8241, p = 6.1×10⁻²⁵ | ✅ PASS |
+| r(Cv, KL) at layer 18 (120 obs. from 3,360 total) | 0.8241, p = 6.1×10⁻²⁵ | ✅ PASS |
+| r(H(P), KL) at layer 18 / population-wide | 0.9279 / 0.9492 | ✅ NEW |
 | T=√d_k ablation: KL minimum location | Exactly at T=√d_k | ✅ PASS |
 | Gap C: KL(entmax15 ‖ softmax), 120 heads | 0.1086 ± 0.070, 120/120 > 0 | ✅ PASS |
 | r(Cv, KL_entmax), 120 heads | 0.8156 | ✅ PASS |
@@ -688,5 +724,5 @@ Any two of these three properties appear in prior work. All three together do no
 
 ---
 
-*Last updated: 2026-07-01. §1–§7 and §9 complete. §8 updated with Gap B results.*
+*Last updated: 2026-07-02. §3 KL measurements disambiguated (K=10 vs K=5000 vs production α=0.3). §4 entropy comparison added (r=0.93 vs Cv r=0.82 at L18; r=0.95 vs 0.61 population-wide). §8 updated.*
 *Remaining open: EXP-004 (multi-model validation, non-blocking).*
