@@ -22,11 +22,11 @@ The question wasn't "how do you encode language" — it was "what *kind* of phys
 this system actually doing?"
 
 That framing led me directly to thermodynamic computing and eventually to Extropic AI
-and their Thermodynamic Simulation Unit (TSU) — hardware that performs Boltzmann
+and their Thermodynamic Sampling Unit (TSU) — hardware that performs Boltzmann
 sampling natively, at near-Landauer efficiency. The stated position from Extropic
-was that to run AI models on thermodynamic hardware, you would need to rebuild them
-from the ground up. Transformers assume deterministic softmax; TSUs perform stochastic
-sampling. The architectures were too different.
+*(TSU 101)* was that to run AI models on thermodynamic hardware, you would need to
+rebuild them from the ground up. Transformers assume deterministic softmax; TSUs
+perform stochastic sampling. The architectures were too different.
 
 My response was a simple question: **"Is it really though? Has anyone actually tried?"**
 
@@ -87,7 +87,7 @@ deterministic, differentiable arithmetic — the exact opposite of what physics
 naturally does cheaply. Thermodynamic hardware (Extropic's TSU, Normal Computing's
 SPU) is built from the physics up, targeting Landauer-efficiency stochastic sampling.
 These are not theoretical devices: Extropic's DTM architecture operates in subthreshold
-CMOS using standard fabrication, consuming approximately 2 fJ per sampling step.
+CMOS using standard fabrication, consuming approximately 2 fJ per sampling step [Extropic, TSU 101].
 
 The obstacle to running transformers on thermodynamic hardware has never been the
 hardware. It has been the bridge. Transformer weights are trained assuming deterministic
@@ -306,7 +306,7 @@ is stronger for having survived the cut.
 
 ## §5 — The Hardware Path
 
-The THRML library (Extropic AI) provides a Python API for thermodynamic simulation
+The THRML library (Extropic AI) provides a Python API for thermodynamic sampling
 unit hardware. TASB's `thrml` backend wraps this API directly:
 
 ```python
@@ -335,8 +335,8 @@ E_Landauer = (1.38 × 10⁻²³ J/K)(300K)(ln 2) ≈ 2.87 × 10⁻²¹ J
 ```
 
 Extropic's DTM architecture (subthreshold CMOS, standard fabrication) operates at
-approximately **2 fJ = 2 × 10⁻¹⁵ J** per sampling step — roughly 10⁶ times above
-Landauer, but approaching it from an architecture that can scale down.
+approximately **2 fJ = 2 × 10⁻¹⁵ J** per sampling step [Extropic, TSU 101] — roughly
+10⁶ times above Landauer, but approaching it from an architecture that can scale down.
 
 Modern GPU floating-point: ~10⁻¹² J per operation = 10⁶ × Landauer.
 DTM silicon: ~2 × 10⁻¹⁵ J per sample = 10³ × Landauer.
@@ -647,7 +647,7 @@ Token strings on both axes. Viewable interactively in the
 | Kim (arXiv:2602.08216) | Feb 9, 2026 | Thermodynamic Lagrangian derivation | Theoretical foundation (Routes 1+3); no hardware bridge |
 | **TASB patent filing** | **Mar 28, 2026** | **Inference-time frozen-weight bridge** | **First implementation** |
 | Boltzmann Attention (arXiv:2606.12478) | Jun 23, 2026 | Learnable Ising couplings | Requires training; submitted 87 days after patent |
-| FAR (arXiv:2505.21535) | 2026 | BiLSTM distillation | Requires training; different architectural approach |
+| FAR (arXiv:2505.21535) | 2025 | BiLSTM distillation | Requires training; different architectural approach |
 
 ### The Prior Art Gap
 
