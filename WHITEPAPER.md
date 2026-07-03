@@ -738,7 +738,7 @@ Any two of these three properties appear in prior work. All three together do no
 
 ```bibtex
 @software{tasb2026,
-  author       = {Paul White},
+  author       = {Paul Shaver},
   title        = {TASB: Thermodynamic Attention Sampling Bridge},
   year         = {2026},
   publisher    = {GitHub},
