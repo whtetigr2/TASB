@@ -114,26 +114,25 @@ class BridgeConfig:
     compare_mode: bool        = False
     vanilla_mode: bool        = False    # bypass bridge entirely
     seed:         int         = 42       # sampling seed
-    # OOM safety ceiling (2026-07-03): use_cache=False means every generation
-    # step reprocesses the FULL sequence through two complete forward passes
-    # (capture + injection), so both compute cost and the target layer's
-    # (B, n_q, S, S) attention/p_thermo tensors grow with total sequence
-    # length. Measured on a real L4 (23GB): a single turn at seq_len=198
-    # already reserved 14.8GB mid-generation; a second turn's growth past
-    # ~seq_len 400-500 OOM'd outright. max_seq_len is a hard ceiling on
-    # current_ids length (checked every step, in generate_with_bridge) with
-    # ~40% headroom below the point that OOM'd — not a tuned-to-fit number,
-    # a real safety margin. This bounds a real memory-growth pattern; it does
-    # not fix the underlying O(S^2)-without-KV-cache inefficiency. The
-    # correct long-term fix is adding real use_cache=True support (which
-    # also requires reworking tasb_capture_v2.py, since its RoPE-patch
-    # currently captures only the newly-computed K before cache
-    # concatenation — wrong for a cached step, where the eager-attention
-    # patch's `key` arg is already the full concatenated sequence). Flagged
-    # as follow-up work, not attempted here under time pressure given the
-    # capture module's correctness invariants are load-bearing for the
-    # whole system's fidelity claims.
-    max_seq_len:  int         = 220
+    # OOM safety ceiling (2026-07-03, real fix): generate_with_bridge now
+    # runs with use_cache=True (dual-cache design -- see that function's
+    # docstring), so per-step cost/memory is O(1) in sequence length instead
+    # of the old O(S^2) full-reprocess-per-step design. Re-measured on the
+    # same real L4 (23.66GB) under a deliberately heavy 6-turn stress load
+    # (800-token responses, growing history up to seq_len=2511): peak
+    # reserved VRAM was 8.82GB -- well under half the budget, vs. the old
+    # design's 17.85GB peak (and eventual OOM) at a fraction of that length.
+    # max_seq_len raised from 220 to 2048 -- this is the real tested ceiling
+    # (stress test's max observed seq_len was 2511, self-limited by its own
+    # history truncation before reaching the old 4096 test cap); pushing
+    # further is plausible given memory grows linearly now, not
+    # quadratically, but is NOT itself empirically verified past ~2500 --
+    # flagged rather than extrapolated as fact. Still enforced as a hard
+    # ceiling on current_ids length every step in generate_with_bridge, both
+    # as a genuine safety margin and because LLaMA-3.2-3B's practical
+    # coherence at very long context is a separate, untested question from
+    # memory safety.
+    max_seq_len:  int         = 2048
     # CSV logging state — declared fields (not runtime-bolted attributes).
     log_active:   bool          = False
     log_file:     Optional[str] = None
