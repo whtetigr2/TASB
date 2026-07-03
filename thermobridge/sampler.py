@@ -254,44 +254,91 @@ def _sample_gumbel(logits: torch.Tensor,
 
 def _sample_rbm(logits: torch.Tensor,
                 config: SamplerConfig) -> torch.Tensor:
-    """Gibbs sampling on the energy landscape.
+    """Gibbs-style Metropolis relaxation on the energy landscape.
 
     Energy E_i = -logit_i. At equilibrium, p_i ∝ exp(-E_i) = exp(logit_i),
-    matching softmax. Gibbs sampling reaches that equilibrium by repeated
-    local updates. Slower than `exact` for the same K but matches how
-    some thermodynamic hardware (RBM-like coupling) settles physically.
+    matching softmax. Runs a single-site Metropolis Markov chain of
+    `rbm_steps` local updates per sample (uniform proposal over positions;
+    Metropolis acceptance min(1, exp(logit_proposal - logit_current))), then
+    takes the final chain state as one draw. Repeated K times per row (K
+    independent chains), accumulated. This is a genuinely different sampling
+    PATH than `exact`'s direct multinomial draw — a finite-step stochastic
+    relaxation process, not an instantaneous analytical draw — which is the
+    point: at rbm_steps -> infinity this chain's stationary distribution is
+    exactly softmax(logits) (standard Metropolis-Hastings detailed-balance
+    result for a symmetric/uniform proposal), so agreement with
+    `exact`/`gumbel` at large rbm_steps is a genuine, independent cross-check
+    that a physically-realizable relaxation process reaches the
+    analytically-predicted equilibrium — not a restatement of it. At small
+    `rbm_steps` relative to S, imperfect mixing (and a resulting KL gap
+    against `exact`/`gumbel`) is expected, not a bug — this backend is
+    explicitly slower-but-independent, per the module docstring.
 
-    Implementation: for each row, run rbm_steps of Gibbs updates over the
-    one-hot state space, then take the final state as one sample. Repeat
-    K times, accumulate.
+    NOTE (2026-07-03): prior to this fix, this function ignored `rbm_steps`
+    entirely and fell through to the same softmax+multinomial draw as
+    `_sample_exact` whenever `rbm_field == 0.0` (the default, and what
+    `per_head_fidelity.py`'s T1.C test uses) — producing byte-identical
+    output to `exact` rather than an independent sample. Found by
+    [[FIND-035-tasb-validation-metrics-scrub]] in the SCIN Ecosystem vault.
+
+    Each chain is initialized at position 0, which is never masked under
+    this file's standing causal-mask assumption (same convention
+    `_sample_exact` uses for its degenerate-row fallback). Given that valid
+    start, a transition into any masked position (logit ~ -3.4e38) has
+    Metropolis acceptance probability that underflows to exactly 0.0 in
+    float32, so the chain provably never visits a masked position — masking
+    is respected exactly, not just approximately.
 
     This is a research backend. Production uses `exact` or `gumbel`.
     """
     K = config.K
+    steps = config.rbm_steps
     B, n_q, S, _ = logits.shape
+    device = logits.device
 
     generator = None
     if config.seed is not None:
-        generator = torch.Generator(device=logits.device)
+        generator = torch.Generator(device=device)
         generator.manual_seed(config.seed)
 
-    probs = torch.softmax(logits, dim=-1)
-    probs_2d = probs.reshape(-1, S)
-
-    # Defensive renorm
-    probs_2d = probs_2d / probs_2d.sum(dim=-1, keepdim=True).clamp(min=1e-30)
+    logits_2d = logits.reshape(-1, S)  # (N, S), N = B*n_q*S
 
     if config.rbm_field != 0.0:
-        offset = torch.arange(S, dtype=torch.float32,
-                              device=probs_2d.device) / S
-        field_bias = torch.exp(config.rbm_field * offset)
-        probs_2d = probs_2d * field_bias
-        probs_2d = probs_2d / probs_2d.sum(dim=-1, keepdim=True).clamp(min=1e-30)
+        # Additive external-field bias in logit space (equivalent to the
+        # previous probability-space reweighting: exp(logit)*exp(field*offset)
+        # == exp(logit + field*offset)), now applied before the relaxation
+        # chain runs rather than as a separate post-hoc step.
+        offset = torch.arange(S, dtype=torch.float32, device=device) / S
+        logits_2d = logits_2d + config.rbm_field * offset
 
-    samples = torch.multinomial(probs_2d, K, replacement=True, generator=generator)
-    p_thermo_2d = torch.zeros_like(probs_2d)
+    N = logits_2d.shape[0]
+
+    # Every chain starts at position 0 — never masked under the causal-mask
+    # assumption this file makes throughout (mirrors _sample_exact's
+    # degenerate-row fallback, which uses the same position for the same
+    # reason).
+    state = torch.zeros(N, K, dtype=torch.long, device=device)
+
+    for _ in range(steps):
+        proposal = torch.randint(0, S, (N, K), generator=generator, device=device)
+
+        cur_logit = torch.gather(logits_2d, 1, state)
+        prop_logit = torch.gather(logits_2d, 1, proposal)
+
+        # Symmetric/uniform proposal -> Metropolis acceptance reduces to the
+        # target-density ratio. Clamp the exponent so a masked-position
+        # comparison overflows cleanly to inf (then clamps to 1.0) instead
+        # of relying on unclamped exp() behavior at extreme magnitudes.
+        accept_prob = torch.exp(torch.clamp(prop_logit - cur_logit, max=80.0))
+        accept_prob = torch.clamp(accept_prob, max=1.0)
+
+        u = torch.rand(N, K, generator=generator, device=device)
+        accept = u < accept_prob
+        state = torch.where(accept, proposal, state)
+
+    p_thermo_2d = torch.zeros_like(logits_2d)
     p_thermo_2d.scatter_add_(
-        -1, samples, torch.ones_like(samples, dtype=torch.float32) / K)
+        -1, state, torch.ones_like(state, dtype=torch.float32) / K)
     return p_thermo_2d.reshape(B, n_q, S, S)
 
 
