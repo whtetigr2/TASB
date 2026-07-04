@@ -25,18 +25,20 @@ thrml  — Extropic THRML block-Gibbs Boltzmann sampler. Requires
 
 INPUT
 -----
-LayerCapture with q_post_rope (B, n_q, S, head_dim), k_post_rope
-(B, n_kv, S, head_dim), attention_mask (B, 1, S, S) or None, scaling float.
+LayerCapture with q_post_rope (B, n_q, Sq, head_dim), k_post_rope
+(B, n_kv, Sk, head_dim), attention_mask (B, 1, Sq, Sk) or None, scaling
+float. Sq == Sk during full-sequence reprocessing (prefill); Sq == 1 < Sk
+during a single-token KV-cached decode step.
 
 OUTPUT
 ------
-p_thermo: (B, n_q, S, S) row-stochastic tensor. Same shape as captured
+p_thermo: (B, n_q, Sq, Sk) row-stochastic tensor. Same shape as captured
 attn_weights — drop-in replacement for the injector.
 
 INVARIANTS
 ----------
 - All backends produce row-stochastic output (rows sum to 1.0 ± float32 eps).
-- All backends produce identical shape (B, n_q, S, S).
+- All backends produce identical shape (B, n_q, Sq, Sk).
 - Mask positions (upper-triangle of causal) receive zero mass.
 - Score computation is internal to the sampler — double-scaling is
   structurally impossible.
@@ -82,8 +84,13 @@ class SamplerConfig:
 def sample(capture: LayerCapture, config: SamplerConfig) -> torch.Tensor:
     """Sample p_thermo from a LayerCapture.
 
-    Returns a torch.Tensor of shape (B, n_q, S, S) on the same device as
+    Returns a torch.Tensor of shape (B, n_q, Sq, Sk) on the same device as
     the input capture, dtype float32 (caller can cast as needed).
+    (2026-07-04 fix: previously derived a single S from logits.shape and
+    used it for both query-row count and key-column count, which silently
+    broke under KV-cached decode where Sq=1 != Sk. Fixed throughout this
+    file to use Sq/Sk separately. Ported from the equivalent fix in
+    Active_Dev/TASB/tasb_sampler_v2.py.)
 
     The output is row-stochastic per Q head — each (B, h, i, :) row sums
     to 1.0 modulo float precision.
@@ -94,7 +101,7 @@ def sample(capture: LayerCapture, config: SamplerConfig) -> torch.Tensor:
 
     # Compute the per-Q-head scaled logits with mask added (canonical form)
     logits = _compute_logits(capture)
-    # logits shape: (B, n_q, S, S), fp32
+    # logits shape: (B, n_q, Sq, Sk), fp32
 
     if config.backend == 'exact':
         return _sample_exact(logits, config)
@@ -155,13 +162,13 @@ def _sample_exact(logits: torch.Tensor,
     As K → ∞, the empirical distribution converges to softmax(logits).
     """
     K = config.K
-    B, n_q, S, _ = logits.shape
+    B, n_q, Sq, Sk = logits.shape
 
     # Row-wise softmax (canonical Boltzmann at T_struct embedded in scaling)
-    probs = torch.softmax(logits, dim=-1)   # (B, n_q, S, S)
+    probs = torch.softmax(logits, dim=-1)   # (B, n_q, Sq, Sk)
 
-    # Flatten the batch/head/row dims for multinomial: (B*n_q*S, S)
-    probs_2d = probs.reshape(-1, S)
+    # Flatten the batch/head/row dims for multinomial: (B*n_q*Sq, Sk)
+    probs_2d = probs.reshape(-1, Sk)
 
     # Defensive: replace any all-zero rows with uniform.
     # Mask positions can produce -inf, which softmax handles, but if an entire
@@ -197,7 +204,7 @@ def _sample_exact(logits: torch.Tensor,
     p_thermo_2d.scatter_add_(
         -1, samples, torch.ones_like(samples, dtype=torch.float32) / K)
 
-    return p_thermo_2d.reshape(B, n_q, S, S)
+    return p_thermo_2d.reshape(B, n_q, Sq, Sk)
 
 
 # ── Gumbel backend ────────────────────────────────────────────────────────
@@ -212,7 +219,7 @@ def _sample_gumbel(logits: torch.Tensor,
     settle to Boltzmann.
     """
     K = config.K
-    B, n_q, S, _ = logits.shape
+    B, n_q, Sq, Sk = logits.shape
 
     # Scoped generator — no global RNG leakage across backend/layer calls
     generator = None
@@ -221,24 +228,24 @@ def _sample_gumbel(logits: torch.Tensor,
         generator.manual_seed(config.seed)
 
     # Vectorized when memory allows (S ≤ 256 at K=10 is ~3.3 MB); loop otherwise.
-    if S <= 256 or K * S <= 65536:
+    if Sk <= 256 or K * Sk <= 65536:
         # Vectorized path
-        logits_exp = logits.unsqueeze(-2).expand(B, n_q, S, K, S)
+        logits_exp = logits.unsqueeze(-2).expand(B, n_q, Sq, K, Sk)
         u = torch.rand(logits_exp.shape, dtype=logits_exp.dtype,
                        device=logits_exp.device, generator=generator).clamp(min=1e-30)
         gumbel = -torch.log(-torch.log(u))
         perturbed = logits_exp + gumbel
-        idxs = perturbed.argmax(dim=-1)  # (B, n_q, S, K)
-        p_thermo = torch.zeros(B, n_q, S, S, dtype=torch.float32,
+        idxs = perturbed.argmax(dim=-1)  # (B, n_q, Sq, K)
+        p_thermo = torch.zeros(B, n_q, Sq, Sk, dtype=torch.float32,
                                 device=logits.device)
-        p_thermo_flat = p_thermo.reshape(-1, S)
+        p_thermo_flat = p_thermo.reshape(-1, Sk)
         idxs_flat = idxs.reshape(-1, K)
         ones = torch.ones_like(idxs_flat, dtype=torch.float32) / K
         p_thermo_flat.scatter_add_(-1, idxs_flat, ones)
-        return p_thermo_flat.reshape(B, n_q, S, S)
+        return p_thermo_flat.reshape(B, n_q, Sq, Sk)
     else:
         # Loop over K to bound memory
-        p_thermo = torch.zeros(B, n_q, S, S, dtype=torch.float32,
+        p_thermo = torch.zeros(B, n_q, Sq, Sk, dtype=torch.float32,
                                 device=logits.device)
         for _ in range(K):
             u = torch.rand(logits.shape, dtype=logits.dtype,
@@ -293,7 +300,7 @@ def _sample_rbm(logits: torch.Tensor,
     """
     K = config.K
     steps = config.rbm_steps
-    B, n_q, S, _ = logits.shape
+    B, n_q, Sq, Sk = logits.shape
     device = logits.device
 
     generator = None
@@ -301,14 +308,14 @@ def _sample_rbm(logits: torch.Tensor,
         generator = torch.Generator(device=device)
         generator.manual_seed(config.seed)
 
-    logits_2d = logits.reshape(-1, S)  # (N, S), N = B*n_q*S
+    logits_2d = logits.reshape(-1, Sk)  # (N, Sk), N = B*n_q*Sq
 
     if config.rbm_field != 0.0:
         # Additive external-field bias in logit space (equivalent to the
         # previous probability-space reweighting: exp(logit)*exp(field*offset)
         # == exp(logit + field*offset)), now applied before the relaxation
         # chain runs rather than as a separate post-hoc step.
-        offset = torch.arange(S, dtype=torch.float32, device=device) / S
+        offset = torch.arange(Sk, dtype=torch.float32, device=device) / Sk
         logits_2d = logits_2d + config.rbm_field * offset
 
     N = logits_2d.shape[0]
@@ -320,7 +327,7 @@ def _sample_rbm(logits: torch.Tensor,
     state = torch.zeros(N, K, dtype=torch.long, device=device)
 
     for _ in range(steps):
-        proposal = torch.randint(0, S, (N, K), generator=generator, device=device)
+        proposal = torch.randint(0, Sk, (N, K), generator=generator, device=device)
 
         cur_logit = torch.gather(logits_2d, 1, state)
         prop_logit = torch.gather(logits_2d, 1, proposal)
@@ -339,7 +346,7 @@ def _sample_rbm(logits: torch.Tensor,
     p_thermo_2d = torch.zeros_like(logits_2d)
     p_thermo_2d.scatter_add_(
         -1, state, torch.ones_like(state, dtype=torch.float32) / K)
-    return p_thermo_2d.reshape(B, n_q, S, S)
+    return p_thermo_2d.reshape(B, n_q, Sq, Sk)
 
 
 # ── Self-test on import ───────────────────────────────────────────────────

@@ -113,12 +113,13 @@ def thrml_sample(
     and runs block Gibbs sampling via THRML.
 
     THRML GRAPH (per batch b, per head h):
-        S CategoricalNodes — one per query position i
+        Sq CategoricalNodes — one per query position i (Sq = number of new
+        query tokens this step; Sq=1 under KV-cached decode, Sq==Sk at prefill)
         CategoricalEBMFactor([Block(nodes)], J_bh)
-            weights[i,j] = logit for key j at query i
+            weights[i,j] = logit for key j (of Sk total) at query i
             Energy: E_j = -weights[i,j]
             Boltzmann distribution = softmax(weights[i,:]) = attention weights
-        CategoricalGibbsConditional(S) samples from softmax(weights[i,:])
+        CategoricalGibbsConditional(Sk) samples from softmax(weights[i,:])
 
     HARDWARE HANDOFF:
         sample_states() is the chip call.
@@ -126,8 +127,13 @@ def thrml_sample(
 
     Returns
     -------
-    p_thermo : torch.Tensor, shape (B, n_q, S, S)
+    p_thermo : torch.Tensor, shape (B, n_q, Sq, Sk)
         Row-stochastic. Ready for alpha-blend in thermobridge.inject.
+        (2026-07-04 fix: Sq/Sk were conflated into a single S derived from
+        q.shape only, which silently built a degenerate 1-node/1-category
+        graph under KV-cached decode where Sq=1 != Sk. Fixed to use Sq
+        (number of nodes) and Sk (categories per node) separately. Ported
+        from the equivalent fix in Active_Dev/TASB/tasb_sampler_thrml.py.)
     """
     if not THRML_AVAILABLE:
         raise ImportError("pip install thrml")
@@ -138,9 +144,10 @@ def thrml_sample(
     mask  = capture.attention_mask
     dev   = q.device
 
-    B, n_q, S, _ = q.shape
+    B, n_q, Sq, _ = q.shape
     n_kv          = k.shape[1]
     n_kvg         = n_q // n_kv
+    Sk            = k.shape[2]  # cache length -- diverges from Sq under KV-caching
 
     # Build logit matrix J = QK^T * scale + mask
     with torch.no_grad():
@@ -149,17 +156,17 @@ def thrml_sample(
         if mask is not None:
             J = J + mask.float()
 
-    J_jax = _torch_to_jax(J)              # (B, n_q, S, S)
+    J_jax = _torch_to_jax(J)              # (B, n_q, Sq, Sk)
     key   = jax.random.key(seed)
 
     # ── Build program structure ONCE per (S, K) configuration ────────────
     # All heads share the same graph topology; only J_bh differs per head.
     # We build one program with a dummy J, then swap weights per head via
     # eqx.tree_at (0.2ms overhead, no JAX retrace).
-    nodes_proto  = [CategoricalNode() for _ in range(S)]
+    nodes_proto  = [CategoricalNode() for _ in range(Sq)]
     free_block   = Block(nodes_proto)
-    factor_proto = CategoricalEBMFactor([free_block], jnp.zeros((S, S)))
-    conditional  = CategoricalGibbsConditional(S)
+    factor_proto = CategoricalEBMFactor([free_block], jnp.zeros((Sq, Sk)))
+    conditional  = CategoricalGibbsConditional(Sk)
     gibbs_spec   = BlockGibbsSpec(
         free_super_blocks=[free_block],
         clamped_blocks=[],
@@ -179,8 +186,8 @@ def thrml_sample(
     def _sample_one_head(J_h: jnp.ndarray, head_key: jax.Array) -> jnp.ndarray:
         """
         Sample p_thermo for a single head.
-        J_h: (S, S) logit matrix for this head.
-        Returns: (S, S) empirical distribution.
+        J_h: (Sq, Sk) logit matrix for this head.
+        Returns: (Sq, Sk) empirical distribution.
 
         ── HARDWARE HANDOFF ──────────────────────────────────────────────
         Today:  sample_states() — JAX GPU simulation via THRML block Gibbs
@@ -189,28 +196,28 @@ def thrml_sample(
         ──────────────────────────────────────────────────────────────────
         """
         # Swap weights into the pre-built program (no retrace)
-        W_h = J_h[:, None, :]             # (S, 1, S) — internal THRML shape
+        W_h = J_h[:, None, :]             # (Sq, 1, Sk) — internal THRML shape
         program = eqx.tree_at(
             lambda p: p.per_block_interactions[0][0].weights,
             program_proto, W_h,
         )
         head_key, sk1, sk2 = jax.random.split(head_key, 3)
-        init_state = [jax.random.randint(sk1, (S,), 0, S, dtype=jnp.uint8)]
+        init_state = [jax.random.randint(sk1, (Sq,), 0, Sk, dtype=jnp.uint8)]
         samples = sample_states(
             sk2, program, schedule,
             init_state,
             [],           # no clamped blocks
             [free_block], # collect these
         )
-        # samples[0]: (K, S) — K draws, samples[0][k,i] = key at query i
+        # samples[0]: (K, Sq) — K draws, samples[0][k,i] = key at query i
         one_hot = jax.nn.one_hot(
-            samples[0].astype(jnp.int32), S, dtype=jnp.float32
-        )                                  # (K, S, S)
-        return one_hot.mean(axis=0)        # (S, S) empirical distribution
+            samples[0].astype(jnp.int32), Sk, dtype=jnp.float32
+        )                                  # (K, Sq, Sk)
+        return one_hot.mean(axis=0)        # (Sq, Sk) empirical distribution
 
     if head_idx is not None:
         # Single-head override path — used for diagnostics
-        out = jnp.zeros((B, n_q, S, S), dtype=jnp.float32)
+        out = jnp.zeros((B, n_q, Sq, Sk), dtype=jnp.float32)
         for b in range(B):
             key, sk = jax.random.split(key)
             p_bh = _sample_one_head(J_jax[b, head_idx], sk)
@@ -225,9 +232,9 @@ def thrml_sample(
             head_keys = jax.random.split(key, n_q + 1)
             key       = head_keys[0]
             head_keys = head_keys[1:]      # (n_q, 2) key array
-            p_b = _sample_all_heads(J_jax[b], head_keys)  # (n_q, S, S)
+            p_b = _sample_all_heads(J_jax[b], head_keys)  # (n_q, Sq, Sk)
             out_list.append(p_b)
-        out = jnp.stack(out_list, axis=0)  # (B, n_q, S, S)
+        out = jnp.stack(out_list, axis=0)  # (B, n_q, Sq, Sk)
 
     p_thermo = _jax_to_torch(out, dev)
 

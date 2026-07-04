@@ -5,7 +5,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 
 """
-tasb_llama32_chat_runtime.py
+llama_chat.py
 ==============================================================================
 TASB — Thermodynamic Attention Sampling Bridge
 Live console chat with real-time bridge metrics
@@ -43,19 +43,19 @@ SLASH COMMANDS (type during chat)
 
 QUICKSTART
 ----------
-  pip install transformers accelerate bitsandbytes
+  pip install -e .   # from the thermobridge_cv repo root (editable install)
   huggingface-cli login
-  python tasb_llama32_chat_runtime.py
+  python examples/llama_chat.py
 
   # CPU-only (no GPU):
-  python tasb_llama32_chat_runtime.py --cpu
+  python examples/llama_chat.py --cpu
 
   # Different model:
-  python tasb_llama32_chat_runtime.py --model meta-llama/Llama-3.2-1B
+  python examples/llama_chat.py --model meta-llama/Llama-3.2-1B
 
   # THRML backend:
   pip install thrml
-  python tasb_llama32_chat_runtime.py --backend thrml
+  python examples/llama_chat.py --backend thrml
 ==============================================================================
 """
 
@@ -350,9 +350,9 @@ def generate_with_bridge(
     Uses the real tasb_sampler_v2 and tasb_injector_v2 APIs directly.
     Returns (response_text, metrics, elapsed_seconds).
     """
-    from tasb_capture_v2 import LlamaAttentionCapture
-    from tasb_sampler_v2 import sample as tasb_sample, SamplerConfig
-    from tasb_injector_v2 import LlamaAttentionInjector, DispatchEntry
+    from thermobridge.capture import LlamaAttentionCapture
+    from thermobridge.sampler import sample as tasb_sample, SamplerConfig
+    from thermobridge.inject import LlamaAttentionInjector, DispatchEntry
 
     # Build full prompt — use chat template if available (Instruct models)
     # fall back to User:/Assistant: format for base models
@@ -668,25 +668,23 @@ def parse_command(cmd: str, cfg: BridgeConfig) -> Tuple[bool, str]:
 
     elif command == "/backend":
         if len(parts) < 2:
-            return True, "Usage: /backend exact|gumbel|rbm|thrml|qubo|vanilla"
+            return True, "Usage: /backend exact|gumbel|rbm|thrml|vanilla"
         b = parts[1].lower()
         if b == "vanilla":
             cfg.vanilla_mode = True
             return True, "Bridge disabled — pure vanilla LLaMA"
-        elif b in ("exact", "thrml", "gumbel", "rbm", "qubo"):
+        elif b in ("exact", "thrml", "gumbel", "rbm"):
             cfg.vanilla_mode = False
             prev_backend = cfg.backend
             cfg.backend = b
             note = ""
             if b == "thrml" and prev_backend != "thrml":
                 note = " (first turn will JIT-compile ~30s)"
-            elif b == "qubo" and prev_backend != "qubo":
-                note = " (CPU Gibbs sampler; expect slow turns at S>10)"
             return True, f"Backend: {prev_backend} -> {b}{note}. Next turn will use {b}."
 
             return True, f"Backend set to {b}"
         else:
-            return True, f"Unknown backend: {b}. Options: exact, gumbel, rbm, thrml, qubo, vanilla"
+            return True, f"Unknown backend: {b}. Options: exact, gumbel, rbm, thrml, vanilla"
 
     elif command == "/k":
         if len(parts) < 2:
@@ -749,7 +747,6 @@ Commands:
   /backend gumbel   Gumbel-max logit-space sampler
   /backend rbm      RBM Gibbs sampler
   /backend thrml    THRML Boltzmann sampler (requires pip install thrml)
-  /backend qubo     QUBO p-bit substrate emulator (CPU; ~5s/head at S=15)
   /backend vanilla  disable bridge entirely
   /k 50             number of Boltzmann samples
   /temp 0.8         generation temperature
@@ -1062,7 +1059,7 @@ if __name__ == "__main__":
     parser.add_argument("--alpha",   type=float, default=0.3)
     parser.add_argument("--layer",   type=int,   default=18)
     parser.add_argument("--backend", default="exact",
-        choices=["exact","gumbel","rbm","thrml","qubo","vanilla"])
+        choices=["exact","gumbel","rbm","thrml","vanilla"])
     parser.add_argument("--k",       type=int,   default=50)
     parser.add_argument("--temp",    type=float, default=0.8)
     parser.add_argument("--cpu",     action="store_true")
@@ -1083,7 +1080,7 @@ if __name__ == "__main__":
     model, tok = load_model(args.model, use_cpu=args.cpu)
 
     try:
-        from tasb_pipeline_v2 import bridge_forward
+        from thermobridge.bridge import bridge_forward
         print(c("  TASB pipeline: ready", C.GREEN))
     except ImportError:
         print(c("  WARNING: tasb_pipeline_v2.py not found. "
