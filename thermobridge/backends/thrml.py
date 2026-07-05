@@ -16,7 +16,10 @@ VERIFIED SIGNATURES (from live thrml install on Lightning A100):
     Block(nodes: list)
     CategoricalEBMFactor(node_groups: list[Block], weights: Array)
     CategoricalGibbsConditional(n_categories: int)
-    BlockGibbsSpec(free_super_blocks, clamped_blocks, node_shape_dtypes=defaults)
+    BlockGibbsSpec(free_super_blocks, clamped_blocks, node_shape_dtypes=...)
+        (this file overrides node_shape_dtypes -- see _STATE_DTYPE below;
+        THRML's own default is uint8, which silently truncates any
+        n_categories > 255)
     BlockSamplingProgram(gibbs_spec, samplers, interaction_groups)
     FactorSamplingProgram(gibbs_spec, samplers, factors, other_interaction_groups)
     SamplingSchedule(n_warmup, n_samples, steps_per_sample)
@@ -141,6 +144,23 @@ _NEG_INF_LOGIT = -1e30  # matches the masking convention used elsewhere in
                         # softmax/Gibbs sampling never selects a padded
                         # position, verified empirically below)
 
+# ---------------------------------------------------------------------------
+# State dtype override (2026-07-05, fixes silent index truncation above 255)
+# ---------------------------------------------------------------------------
+#
+# THRML's own library default for CategoricalNode state is uint8
+# (thrml/pgm.py DEFAULT_NODE_SHAPE_DTYPES), i.e. category indices above 255
+# silently wrap (280 -> 24) with no error or warning -- confirmed both in
+# THRML itself (reported upstream: extropic-ai/thrml#62) and, separately,
+# empirically reproduced against THIS file's own construction (no
+# node_shape_dtypes override existed here either). Since Sk_bucket can be up
+# to BUCKET_MAX=4096, this was a real, silent attention-position-corruption
+# bug for any real conversation whose thrml-backend call ever saw
+# Sk/Sk_bucket > 255 -- i.e. any conversation past roughly 256 tokens. Fixed
+# by explicitly overriding the node dtype to something wide enough for
+# BUCKET_MAX and beyond. See FIND-037 in the vault for the full writeup.
+_STATE_DTYPE = jnp.int32
+
 
 def _bucket_size(n: int) -> int:
     """Round n up to the next power-of-2 bucket, clamped to [BUCKET_MIN, BUCKET_MAX]."""
@@ -247,6 +267,9 @@ def thrml_sample(
     gibbs_spec   = BlockGibbsSpec(
         free_super_blocks=[free_block],
         clamped_blocks=[],
+        node_shape_dtypes={
+            CategoricalNode: jax.ShapeDtypeStruct(tuple(), dtype=_STATE_DTYPE)
+        },
     )
     program_proto = FactorSamplingProgram(
         gibbs_spec=gibbs_spec,
@@ -284,7 +307,7 @@ def thrml_sample(
         # positions have -1e30 logit, and while they're already
         # structurally unreachable via any real transition, starting there
         # would need an extra (harmless but needless) first-step correction.
-        init_state = [jax.random.randint(sk1, (Sq,), 0, Sk, dtype=jnp.uint8)]
+        init_state = [jax.random.randint(sk1, (Sq,), 0, Sk, dtype=_STATE_DTYPE)]
         samples = sample_states(
             sk2, program, schedule,
             init_state,
@@ -394,6 +417,9 @@ if __name__ == "__main__":
     gibbs_spec = BlockGibbsSpec(
         free_super_blocks=[free_block],
         clamped_blocks=[],
+        node_shape_dtypes={
+            CategoricalNode: jax.ShapeDtypeStruct(tuple(), dtype=_STATE_DTYPE)
+        },
     )
     program = FactorSamplingProgram(
         gibbs_spec=gibbs_spec,
@@ -404,7 +430,7 @@ if __name__ == "__main__":
 
     key = jax.random.key(42)
     key, sk1, sk2 = jax.random.split(key, 3)
-    init  = [jax.random.randint(sk1, (S,), 0, S, dtype=jnp.uint8)]
+    init  = [jax.random.randint(sk1, (S,), 0, S, dtype=_STATE_DTYPE)]
     # Self-test uses conservative n_warmup/steps_per_sample for a strict
     # correctness check. Production defaults (n_warmup=0, steps_per_sample=1)
     # were validated equivalent -- see
