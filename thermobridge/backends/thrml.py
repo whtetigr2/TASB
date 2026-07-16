@@ -77,24 +77,56 @@ except ImportError:
 # Tensor bridge
 # ---------------------------------------------------------------------------
 
+# Uses the DLPack ARRAY-API protocol (jnp.from_dlpack / torch.from_dlpack), NOT
+# the legacy capsule helpers. The previous implementation --
+#     jax_dlpack.from_dlpack(torch_to_dlpack(t))     (torch -> jax)
+#     torch.from_dlpack(jax_dlpack.to_dlpack(arr))   (jax -> torch)
+# -- is DEAD on current versions. Verified live 2026-07-16 on
+# torch 2.8.0+cu128 / jax 0.9.2:
+#   * jax.dlpack.from_dlpack() now requires an object exposing __dlpack__ /
+#     __dlpack_device__, so handing it a raw capsule raises TypeError;
+#   * jax.dlpack.to_dlpack() has been REMOVED from jax entirely -> AttributeError.
+# BOTH failures were swallowed by `except Exception: pass`, silently demoting
+# every transfer to a GPU->CPU->GPU host round trip. Note the trap that hid it:
+# DLPACK_AVAILABLE was True because the *module* imports fine -- the *functions*
+# were gone. Measured per-call cost of the silent fallback:
+#   torch->jax 0.161ms -> 0.043ms (3.8x) | jax->torch 0.023ms -> 0.008ms (3.1x)
+# The fallback is kept for safety but now WARNS once rather than failing
+# silently -- a silent fallback is exactly how this rotted in the first place.
+
+_DLPACK_FALLBACK_WARNED = False
+
+
+def _warn_dlpack_fallback(direction: str, exc: Exception) -> None:
+    global _DLPACK_FALLBACK_WARNED
+    if _DLPACK_FALLBACK_WARNED:
+        return
+    _DLPACK_FALLBACK_WARNED = True
+    warnings.warn(
+        f"zero-copy dlpack {direction} handoff unavailable "
+        f"({type(exc).__name__}: {exc}); falling back to a host round trip "
+        f"(GPU->CPU->GPU) on EVERY transfer. Correct but slow -- fix the "
+        f"handoff rather than living with it.",
+        RuntimeWarning, stacklevel=3,
+    )
+
+
 def _torch_to_jax(t: torch.Tensor):
-    if DLPACK_AVAILABLE:
-        try:
-            return jax_dlpack.from_dlpack(
-                torch_to_dlpack(t.contiguous().detach()))
-        except Exception:
-            pass
-    return jnp.array(t.cpu().float().numpy())
+    """Zero-copy torch -> jax, staying on device (DLPack array-API)."""
+    try:
+        return jnp.from_dlpack(t.contiguous().detach())
+    except Exception as e:              # pragma: no cover - environment dependent
+        _warn_dlpack_fallback("torch->jax", e)
+        return jnp.array(t.detach().cpu().float().numpy())
 
 
 def _jax_to_torch(arr, device, dtype=torch.float32) -> torch.Tensor:
-    if DLPACK_AVAILABLE:
-        try:
-            return torch.from_dlpack(
-                jax_dlpack.to_dlpack(arr)).to(device=device, dtype=dtype)
-        except Exception:
-            pass
-    return torch.tensor(np.array(arr), device=device, dtype=dtype)
+    """Zero-copy jax -> torch, staying on device (DLPack array-API)."""
+    try:
+        return torch.from_dlpack(arr).to(device=device, dtype=dtype)
+    except Exception as e:              # pragma: no cover - environment dependent
+        _warn_dlpack_fallback("jax->torch", e)
+        return torch.tensor(np.array(arr), device=device, dtype=dtype)
 
 
 # ---------------------------------------------------------------------------
