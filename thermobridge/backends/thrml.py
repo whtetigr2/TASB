@@ -315,10 +315,22 @@ def thrml_sample(
             [free_block], # collect these
         )
         # samples[0]: (K, Sq) -- K draws, samples[0][k,i] = key at query i
-        one_hot = jax.nn.one_hot(
-            samples[0].astype(jnp.int32), Sk_bucket, dtype=jnp.float32
-        )                                  # (K, Sq, Sk_bucket)
-        return one_hot.mean(axis=0)        # (Sq, Sk_bucket) empirical distribution
+        # Count draws directly into (Sq, Sk_bucket) rather than building a
+        # one-hot and averaging it away. XLA does NOT fuse one_hot -> mean, so
+        # the old form materialized (K, Sq, Sk_bucket) floats -- and under vmap
+        # that is (n_heads, K, Sq, Sk_bucket) = 24*K*Sq*Sk_bucket*4 bytes. At
+        # K=1000, Sq=646, Sk_bucket=1024 that is 59 GiB and OOMs even on a 96GB
+        # card (observed live, 2026-07-16). The scatter-count below is
+        # mathematically identical but O(Sq*Sk_bucket) in peak memory -- a
+        # factor of K smaller -- which is what makes large K usable at all.
+        # Integer accumulation keeps the result exactly deterministic
+        # regardless of scatter/atomic ordering (float32 would also be exact
+        # for K < 2^24, but integers leave no room for doubt).
+        idx    = samples[0].astype(jnp.int32)                      # (K, Sq)
+        q_idx  = jnp.broadcast_to(
+            jnp.arange(Sq, dtype=jnp.int32)[None, :], idx.shape)   # (K, Sq)
+        counts = jnp.zeros((Sq, Sk_bucket), dtype=jnp.int32).at[q_idx, idx].add(1)
+        return counts.astype(jnp.float32) / jnp.float32(K)  # (Sq, Sk_bucket)
 
     if head_idx is not None:
         # Single-head override path -- used for diagnostics
