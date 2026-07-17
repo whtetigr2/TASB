@@ -106,7 +106,7 @@ class BridgeConfig:
     alpha:        float       = 0.3
     layer_idx:    object      = 18       # int or List[int]
     backend:      str         = "exact"
-    K:            int         = 50
+    K:            int         = 500
     temperature:  float       = 0.8
     top_p:        float       = 0.9
     rep_penalty:  float       = 1.1
@@ -1060,7 +1060,7 @@ if __name__ == "__main__":
     parser.add_argument("--layer",   type=int,   default=18)
     parser.add_argument("--backend", default="exact",
         choices=["exact","gumbel","rbm","thrml","vanilla"])
-    parser.add_argument("--k",       type=int,   default=50)
+    parser.add_argument("--k",       type=int,   default=500)
     parser.add_argument("--temp",    type=float, default=0.8)
     parser.add_argument("--cpu",     action="store_true")
     parser.add_argument("--max-tokens", type=int, default=256)
