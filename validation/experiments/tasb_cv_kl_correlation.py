@@ -6,7 +6,6 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 tasb_cv_kl_correlation.py — Cv × KL Pearson Correlation Across Heads
 ==============================================================================
 TASB Thermodynamic Validation — FIND-020 Correlation Prediction
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS MEASURES

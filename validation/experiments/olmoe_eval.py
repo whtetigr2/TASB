@@ -37,10 +37,6 @@ Reproduce:
 
 Results saved to: results/tasb_olmoe_moe_<timestamp>.csv
 
-PATENT NOTE
------------
-USPTO Provisional 64/019,999 (March 28, 2026), Paul W. Shaver.
-{inference-time frozen} ∩ {full-Boltzmann} ∩ {TSU hardware path} unoccupied.
 """
 
 import argparse

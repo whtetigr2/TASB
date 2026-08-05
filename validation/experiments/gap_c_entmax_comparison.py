@@ -2,7 +2,6 @@
 gap_c_entmax_comparison.py — Gap C: Lagrangian Uniqueness Measurable Consequence
 ==============================================================================
 FIND-025 §5 → Gap C resolution
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS PROVES

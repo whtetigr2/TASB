@@ -2,7 +2,7 @@
 thermobridge — thermodynamic attention sampling for frozen transformer models
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 Quick start:
 

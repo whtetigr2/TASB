@@ -2,7 +2,7 @@
 capture.py — RoPE-aware per-Q-head attention capture for LLaMA models
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 During a forward pass on a frozen LLaMA model, this module captures the
 canonical attention state at one or more designated layers:

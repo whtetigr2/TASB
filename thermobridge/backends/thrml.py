@@ -8,7 +8,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 backends/thrml.py — THRML Backend for thermobridge
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 VERIFIED SIGNATURES (from live thrml install on Lightning A100):
 

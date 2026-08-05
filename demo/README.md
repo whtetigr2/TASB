@@ -33,5 +33,4 @@ r(Cv, KL) = 0.8241 — specific heat predicts sampling error (p = 6.1 × 10⁻²
 
 ---
 
-Patent Pending · USPTO Provisional 64/019,999 ·
 [GitHub](https://github.com/whtetigr2/TASB)

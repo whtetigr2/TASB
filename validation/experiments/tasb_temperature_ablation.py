@@ -2,7 +2,6 @@
 tasb_temperature_ablation.py — T=√dk Temperature Calibration Ablation
 ==============================================================================
 FIND-025 Anti-Obfuscation Flag 1 resolution
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS PROVES

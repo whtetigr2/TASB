@@ -1,7 +1,6 @@
 """
 tests/test_multilayer_v1.py — Phase 2 regression tests for multi-layer refactor
 ==============================================================================
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 Validates the tasb_injector_v2 + tasb_pipeline_v2 multi-layer refactor

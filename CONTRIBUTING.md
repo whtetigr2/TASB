@@ -31,11 +31,9 @@ and are skipped by default. Run them with `pytest -m slow`.
 
 ## Intellectual property notice
 
-Contributions must not include any material derived from or replicating the
-thermodynamic sampling method described in USPTO Provisional 64/019,999
-without explicit written permission from Paul W. Shaver. By submitting a pull
-request you certify that your contribution is original and does not constitute
-a patent work-for-hire claim.
+By submitting a pull request you certify that your contribution is your own
+work, or that you otherwise have the right to submit it, and that you license
+it under this project's MIT licence.
 
 ## Contact
 

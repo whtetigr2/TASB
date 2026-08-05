@@ -7,7 +7,6 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 tasb_xla_memory_monitor.py — XLA HBM Monotonicity Test
 ==============================================================================
 TASB Validation Suite — Tier 1.B
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS MEASURES

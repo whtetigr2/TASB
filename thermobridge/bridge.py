@@ -2,7 +2,7 @@
 bridge.py — Canonical two-pass thermodynamic attention sampling bridge
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 Two-pass protocol:
   1. CAPTURE  — vanilla forward with patched apply_rotary_pos_emb and

@@ -2,7 +2,7 @@
 inject.py — Per-Q-head p_thermo injection into attention forward
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 Takes a dispatch table of {layer_idx: DispatchEntry} and blends each
 layer's p_thermo into the model's forward pass.

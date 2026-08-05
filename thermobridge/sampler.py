@@ -2,7 +2,7 @@
 sampler.py — Boltzmann sampler backends for thermobridge
 ==============================================================================
 Author: Paul W. Shaver
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 
 Consumes a LayerCapture and produces a per-Q-head p_thermo tensor that the
 injector blends with vanilla attention weights.

@@ -7,7 +7,6 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 tasb_perplexity.py — WikiText-2 Perplexity Evaluation (T3)
 ==============================================================================
 TASB Validation Suite — Tier 3 (Downstream Task Evaluation)
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 PURPOSE

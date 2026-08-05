@@ -45,7 +45,6 @@
 \author{Paul White\\[0.3em]
 \small Independent Researcher\\
 \small \href{mailto:whtetigr2@gmail.com}{whtetigr2@gmail.com}\\[0.3em]
-\small \textit{Patent Pending~$\cdot$~USPTO Provisional 64/019,999~$\cdot$~March 28, 2026}\\
 \small \textit{Code: \url{https://github.com/whtetigr2/thermobridge}}\\
 \small \textit{Demo: \url{https://huggingface.co/spaces/shvrpws/thermobridge}}
 }
@@ -194,7 +193,7 @@ thermodynamic Lagrangian. The Lagrangian is \emph{conditionally unique}:
 
 Uniqueness means softmax is not one of many possible equilibria --- it is the only
 equilibrium within the Shannon--Boltzmann framework. Kim's paper was submitted
-February~9, 2026 --- 47 days before the TASB patent filing (March~28, 2026).
+February~9, 2026 --- 47 days before this work's first implementation (March~28, 2026).
 Kim provides the theoretical framework; TASB is the hardware implementation.
 
 \subsection{Proof 3 --- Kajitsuka--Sato Boltzmann Operator}
@@ -685,14 +684,14 @@ Vaswani et al.~\citep{vaswani2017attention} & 2017 & Scaled dot-product attentio
 Ramsauer et al.~\citep{ramsauer2021hopfield} & 2021 & Hopfield $\leftrightarrow$ attention & Energy-based connection; deterministic \\
 Kajitsuka \& Sato~\citep{kajitsuka2024transformers} & 2023 & Boltzmann operator theorem & Theoretical foundation; no implementation \\
 Kim~\citep{kim2026thermodynamic} & Feb.\ 9, 2026 & Thermodynamic Lagrangian & Theoretical foundation; no hardware bridge \\
-\textbf{TASB patent filing} & \textbf{Mar.\ 28, 2026} & \textbf{Inference-time frozen-weight bridge} & \textbf{First implementation} \\
-Boltzmann Attention~\citep{boltzmann_attention2026} & Jun.\ 23, 2026 & Learnable Ising couplings & Requires training; 87 days after patent \\
+\textbf{TASB (this work)} & \textbf{Mar.\ 28, 2026} & \textbf{Inference-time frozen-weight bridge} & \textbf{First implementation} \\
+Boltzmann Attention~\citep{boltzmann_attention2026} & Jun.\ 23, 2026 & Learnable Ising couplings & Requires training; 87 days later \\
 FAR~\citep{far2026} & May 2026 & BiLSTM distillation & Requires training; different approach \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-No work in the literature --- as of the patent filing date, March 28, 2026, and
+No work in the literature --- as of March 28, 2026, and
 as confirmed by systematic arXiv search from February~9 to March~28, 2026 ---
 implements an inference-time, frozen-weight Boltzmann bridge for arbitrary
 transformer attention.

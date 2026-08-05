@@ -65,7 +65,6 @@ that. The starting assumption held: **you do not need to rebuild the model.**
 
 ---
 
-*Patent Pending · USPTO Provisional 64/019,999 · March 28, 2026*
 *Working implementation: [github.com/whtetigr2/thermobridge](https://github.com/whtetigr2/thermobridge)*
 *Live demo: [huggingface.co/spaces/shvrpws/thermobridge](https://huggingface.co/spaces/shvrpws/thermobridge)*
 
@@ -136,7 +135,7 @@ Lagrangian using Euler-Lagrange equations. The Lagrangian is **conditionally uni
 
 This means softmax is not one of many possible equilibria. Within the
 Shannon-Boltzmann framework, it is the *only* equilibrium. Kim's paper was submitted
-February 9, 2026 — 47 days before the TASB patent filing (March 28, 2026). Kim
+February 9, 2026 — 47 days before this work's first implementation (March 28, 2026). Kim
 provides the theoretical framework; TASB is the hardware implementation.
 
 ### Proof 3 — Kajitsuka & Sato 2023 (arXiv:2307.14023, ICLR 2024)
@@ -706,17 +705,17 @@ Token strings on both axes. Viewable interactively in the
 | Ramsauer et al. | 2021 | Hopfield ↔ attention | Energy-based connection; deterministic, not sampling |
 | Kajitsuka & Sato | 2023 | Boltzmann operator theorem | Theoretical foundation (Route 2); no inference-time implementation |
 | Kim (arXiv:2602.08216) | Feb 9, 2026 | Thermodynamic Lagrangian derivation | Theoretical foundation (Routes 1+3); no hardware bridge |
-| **TASB patent filing** | **Mar 28, 2026** | **Inference-time frozen-weight bridge** | **First implementation** |
-| Boltzmann Attention (arXiv:2606.12478) | Jun 23, 2026 | Learnable Ising couplings | Requires training; submitted 87 days after patent |
+| **TASB (this work)** | **Mar 28, 2026** | **Inference-time frozen-weight bridge** | **First implementation** |
+| Boltzmann Attention (arXiv:2606.12478) | Jun 23, 2026 | Learnable Ising couplings | Requires training; submitted 87 days later |
 | FAR (arXiv:2505.21535v4) | May 2026 | BiLSTM distillation | Requires training; different architectural approach |
 
 ### The Prior Art Gap
 
-No work in the literature — as of the patent filing date, March 28, 2026, and as
+No work in the literature — as of March 28, 2026, and as
 confirmed by systematic arXiv search from February 9 to March 28, 2026 — implements
 an inference-time, frozen-weight Boltzmann bridge for arbitrary transformer attention.
 
-Kim (2026) is the closest theoretical work, submitted 47 days before the patent.
+Kim (2026) is the closest theoretical work, submitted 47 days earlier.
 Kim proves the isomorphism and derives the Lagrangian. Kim does not build the bridge,
 does not implement sampling, does not connect to thermodynamic hardware, and does not
 derive the Cv observable or its empirical validation. The gap from theory to
@@ -742,8 +741,7 @@ Any two of these three properties appear in prior work. All three together do no
   title        = {TASB: Thermodynamic Attention Sampling Bridge},
   year         = {2026},
   publisher    = {GitHub},
-  url          = {https://github.com/whtetigr2/TASB},
-  note         = {Patent Pending, USPTO Provisional 64/019,999}
+  url          = {https://github.com/whtetigr2/TASB}
 }
 ```
 

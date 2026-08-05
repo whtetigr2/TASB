@@ -157,7 +157,3 @@ diffusion-like models*, [arXiv:2510.23972](https://arxiv.org/abs/2510.23972).
 ## License
 
 MIT — see [LICENSE](LICENSE)
-
-Patent Pending: USPTO Provisional 64/019,999 (filed 2026-03-28). Retained as a record
-of filing; note that the energy conclusion above bears on the scope of what the
-disclosed approach can deliver.

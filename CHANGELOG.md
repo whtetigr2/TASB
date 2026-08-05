@@ -17,6 +17,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validated on LLaMA 3.2-3B and OLMoE-1B-7B: ΔPPL ≤ +0.012 nats at α=0.3, K=10
 
 ### Notes
-- USPTO Provisional patent 64/019,999 filed 2026-03-28
 - THRML backend requires `pip install thrml` (Extropic hardware path)
 - Multi-layer composition with `thrml` backend is single-layer only pending validation

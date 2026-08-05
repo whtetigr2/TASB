@@ -6,7 +6,6 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 tasb_attention_capture.py — Actual Attention Matrix Capture for Demo
 ==============================================================================
 TASB Demo Data Collection
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS CAPTURES

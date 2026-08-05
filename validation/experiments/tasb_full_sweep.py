@@ -6,7 +6,6 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 tasb_full_sweep.py — Full Thermodynamic Landscape: All Layers × All Heads × 5 Prompts
 ==============================================================================
 TASB Demo Data Collection
-Patent: USPTO Provisional 64/019,999 (March 28, 2026)
 Author: Paul W. Shaver
 
 WHAT THIS MEASURES

@@ -7,7 +7,7 @@ Tab 2: Real Attention Viewer — actual per-token softmax attention matrices, al
 Tab 3: Real LLaMA Profile — measured thermodynamic landscape, LLaMA 3.2-3B on A100.
 Tab 4: About / Whitepaper.
 
-© 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
+© 2026 Paul W. Shaver.
 """
 
 import os
@@ -681,7 +681,6 @@ HERO_HTML = """
       letter-spacing:0.08em;
       padding-bottom:20px;
   ">
-    Patent Pending &nbsp;·&nbsp; USPTO Provisional 64/019,999 &nbsp;·&nbsp;
     <a href="https://github.com/whtetigr2/TASB"
        style="color:#aa7744;text-decoration:none;border-bottom:1px solid #553322;">
       GitHub ↗
@@ -738,7 +737,6 @@ HEADER_HTML = """
     no fine-tuning, no architectural changes, no retraining
   </div>
   <div style="font-family: monospace; font-size: 10px; color: #7a5533; letter-spacing: 0.08em;">
-    Patent Pending &nbsp;·&nbsp; USPTO Provisional 64/019,999 &nbsp;·&nbsp;
     <a href="https://github.com/whtetigr2/TASB"
        style="color: #aa7744; text-decoration: none; border-bottom: 1px solid #553322;">
       GitHub ↗
@@ -1093,7 +1091,6 @@ in existence is already compatible.**
 | **Error bound** | KL(softmax ‖ bridge) → 0 at rate 1/K |
 | **Requires retraining?** | No — works on any frozen transformer weights |
 | **Hardware target** | Extropic THRML / thermodynamic sampling units (TSUs) |
-| **Patent** | USPTO Provisional 64/019,999 |
 
 ---
 
@@ -1317,8 +1314,6 @@ the deterministic softmax world.
 ---
 
 ## Technical Reference
-
-**Patent:** USPTO Provisional Application 64/019,999
 
 **Foundational theorem (Kajitsuka & Sato, 2023, arXiv:2307.14023):**
 The contextual map of single-layer self-attention is a Boltzmann operator, and this map
