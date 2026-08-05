@@ -1,0 +1,17 @@
+==========================================================================
+GRAPH 1 — THERMOBRIDGE CONSTRUCTION: CategoricalEBMFactor([block], W)
+==========================================================================
+  A  lag-1 autocorrelation      : 0.01272   (IID -> ~0)
+  B  cross-node correlation     : 0.01361   (uncoupled -> ~0)
+  C  TV vs softmax, warmup=0    : 0.01560
+     TV vs softmax, warmup=200  : 0.01598
+     warmup effect (|delta|)    : 0.00038   (nothing to mix -> ~0)
+  D  distribution match         : PASS
+
+==========================================================================
+GRAPH 2 — POSITIVE CONTROL: two node groups, pairwise coupling
+==========================================================================
+  A  lag-1 autocorrelation      : 0.52863   (coupled -> >0)
+  B  cross-node corr (within A) : 0.02100
+  B' A-to-B coupled-pair corr   : 0.23615   (coupled -> >0)
+  -> instrument DOES detect coupling when coupling exists

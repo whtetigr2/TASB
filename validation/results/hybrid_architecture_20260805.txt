@@ -1,0 +1,20 @@
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+==============================================================================
+HYBRID: sink(absolute, exact) + local window(relative).  baseline ppl 65.25
+==============================================================================
+ n_sink     w  support%  exact-support   sampled K=32
+      0     8     30.7% 45811.67 702.05x 43376.23 664.73x  <- grid-only
+      0    16     41.4%  9626.90 147.53x 11173.68 171.23x  <- grid-only
+      0    32     57.0%  2097.89 32.15x  2200.10 33.72x  <- grid-only
+      1     8     76.8%   133.01  2.04x   231.52  3.55x
+      1    16     86.3%    80.44  1.23x   134.22  2.06x
+      1    32     93.4%    68.02  1.04x    98.57  1.51x
+      2     8     77.1%   113.21  1.73x   208.74  3.20x
+      2    16     86.7%    77.54  1.19x   136.28  2.09x
+      2    32     93.7%    68.10  1.04x   104.48  1.60x
+      4     8     78.0%    94.07  1.44x   161.54  2.48x
+      4    16     87.6%    71.04  1.09x   111.83  1.71x
+      4    32     94.3%    66.60  1.02x   100.07  1.53x
+
+n_sink=0 is a pure lattice (no absolute wiring) — the control that isolates
+how much the sink is worth. Support% is measured mass inside the wiring.

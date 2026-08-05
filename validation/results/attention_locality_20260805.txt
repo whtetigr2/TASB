@@ -1,0 +1,18 @@
+==========================================================================
+ATTENTION LOCALITY — does RoPE concentrate mass where absolute does not?
+==========================================================================
+
+  GPT-2 (learned absolute positions)   (S=92 tokens, 12 layers)
+     window w       4       8      16      32      64
+       mass<w   0.285   0.391   0.509   0.656   0.860
+    effective support (exp entropy) :    9.3  of 92
+    mass on position 0 (sink)       :  0.478
+
+  SmolLM2-135M (RoPE)   (S=90 tokens, 30 layers)
+     window w       4       8      16      32      64
+       mass<w   0.262   0.367   0.496   0.656   0.883
+    effective support (exp entropy) :    7.5  of 90
+    mass on position 0 (sink)       :  0.440
+
+If RoPE mass concentrates in a small w, the interaction graph is BANDED:
+chromatic number O(w) instead of O(S), and Z1's degree-16 can hold it.

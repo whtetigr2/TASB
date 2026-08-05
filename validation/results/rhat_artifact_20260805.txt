@@ -1,0 +1,12 @@
+======================================================================
+data: M=4 chains x K=100 draws, S=16, IID by construction
+======================================================================
+1. COMMITTED formula   max=  9.7190  mean= 4.1136
+2. CORRECT Gelman-Rubin max=  1.0135  mean= 0.9996   (IID -> ~1.0)
+
+3. WHERE the large values live (artifact test):
+   entries with rhat > 2 : n= 209   mean p = 0.066758
+   entries with rhat <=2 : n=  47   mean p = 0.043564
+   -> large rhat sits at p 1x SMALLER than the rest
+
+VERDICT: ARTIFACT

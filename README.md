@@ -1,108 +1,144 @@
 # thermobridge
 
-[![CI](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml/badge.svg)](https://github.com/whtetigr2/TASB/actions/workflows/ci.yml)
-[![Demo](https://img.shields.io/badge/🤗%20Space-thermobridge-blue)](https://huggingface.co/spaces/shvrpws/thermobridge)
-[![Patent Pending](https://img.shields.io/badge/patent-pending-blue)](https://patents.google.com/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+**Thermodynamic attention sampling for frozen transformers.**
 
-Thermodynamic attention sampling bridge for frozen transformer models. Replaces softmax attention weights with Boltzmann-sampled distributions drawn from the same energy landscape — no fine-tuning, no architectural changes, no retraining.
+> ## Status: the original premise is closed — negative result, 2026-08-05
+>
+> thermobridge began as an attempt to run a **frozen** transformer's attention on
+> Extropic's thermodynamic sampling hardware as a drop-in backend. Deep verification
+> on 2026-08-05 established that this **cannot pay off energetically**, and the
+> reason is structural rather than an implementation defect.
+>
+> **A frozen autoregressive transformer has no intractable normalisation anywhere in
+> its forward pass** — its conditionals are tractable by construction. Its energy is
+> spent on dense linear algebra, and a TSU's primitive is sampling. The one genuinely
+> Boltzmann-shaped operation is the attention softmax, which is **1.16% of an
+> attention row**; logits and the weighted sum are 49.4% each and are irreducible,
+> because you cannot sample from `softmax(q·Kᵀ)` without first computing `q·Kᵀ` to
+> program the couplings.
+>
+> Whole-model energy ceiling: **~0.39%, even at zero TSU energy.**
+>
+> This repository is preserved as the evidence trail. See
+> [`validation/results/tsu_attention_20260805.md`](validation/results/tsu_attention_20260805.md)
+> for the full measurement record, controls, and refuted attempts.
 
 ---
 
-## Interactive Demo
+## Corrections to earlier claims in this repository
 
-[**Try it on Hugging Face Spaces →**](https://huggingface.co/spaces/shvrpws/thermobridge)
+Two classes of earlier claim did not survive verification. They are corrected here
+rather than deleted, because the measurements were sound — what was wrong was the
+inference drawn from them.
 
-The demo has two tabs:
-- **Synthetic (CPU)** — explore the Boltzmann-softmax equivalence on controlled energy matrices, adjust K to watch 1/K convergence live
-- **Full Pipeline (GPU)** — real LLaMA 3.2-3B inference with bridge-sampled attention (GPU Space required)
+**1. The sampler was uncoupled (IID), so "block Gibbs" was doing nothing.**
+The THRML graph was built with `CategoricalEBMFactor` over a **single node group**.
+Per `DiscreteEBMFactor` the energy term is then unary — no couplings — so the joint
+factorises completely and consecutive samples are independent by construction.
+Measured: lag-1 autocorrelation **0.013**, against **0.529** for a genuinely coupled
+graph.
+
+Consequences for the old validation table:
+
+| earlier claim | status |
+|---|---|
+| "T2.C Detailed balance (χ², p=0.43)" | **Mislabelled and uninformative.** It was a goodness-of-fit test of the empirical distribution, not a detailed-balance test of a transition kernel. An uncoupled categorical sampler passes it trivially. |
+| "T2.B Gibbs chain mixing, R-hat = 1.0003" | **Vacuous on an uncoupled graph.** A separate R-hat of 14.56 chased earlier was a units artifact; computed correctly it is 0.9996. |
+| `thrml` backend "Hardware-ready" | **Withdrawn.** The graph it built had no couplings and was not a TSU path. |
+| T3/T5 perplexity (LLaMA 3.2-3B, OLMoE-1B-7B) | **Measurements stand, framing does not.** They show that K-sample attention approximates softmax attention. They do not show anything thermodynamic. |
+
+**2. The "1.09× architectural floor" was sequence-length dependent.**
+It was measured at short S and does not transfer. Same configuration
+(4 sink + 16 local window), exact, no sampling:
+
+| S | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|
+| × baseline | 1.51 | 2.23 | 4.72 | **9.34** |
+| attention mass captured | 0.85 | 0.79 | 0.73 | 0.68 |
 
 ---
 
-## Installation
+## What was established, and stands
 
-```bash
-pip install thermobridge
+Measured on GPT-2 small, wikitext-2, S=512, with controls throughout. Environment
+pinned in [`requirements.lock`](requirements.lock).
+
+**A closed-form, training-free embedding of frozen attention onto Extropic's
+published substrate.** Binary Bernoulli p-bits, strictly pairwise energy, bipartite,
+degree 4 — all matching arXiv:2510.23972. Nothing is trained; every parameter is
+written directly from the frozen model's logits.
+
+```
+u_j(s) = alpha * ( sum_i sigma_i(j) * s_i  -  (b-1) )  +  l_j
+E(s,h) = - sum_j h_j * u_j(s)
 ```
 
-For the THRML hardware backend (Extropic thermodynamic simulation unit):
+In spin form this is exactly an Ising model — edge weight `W_ij = (alpha/2)*sigma_i(j)`,
+hidden bias `b_j = (l_j - alpha*(b-1))/2` — and it is built in THRML with `IsingEBM`
+and sampled by two-colour block Gibbs, the DTCA's native operation.
 
-```bash
-pip install "thermobridge[thrml]"
+| result | value |
+|---|---|
+| embedding exactness (enumerated, α=40) | 5.6e-16 |
+| THRML TV vs frozen-model softmax | 0.056 |
+| THRML lag-1 autocorrelation | **0.913** (genuinely coupled) |
+| same target, true IID draws | 0.0002 |
+| α=0 control (couplings zeroed) | TV 0.590 — couplings are load-bearing |
+| tree-factored max degree | **4** (paper states ~12) |
+| p-bits per attention row | 126 |
+| sampling convergence | **1.032×** of its own exact floor |
+
+**Independent reproduction of the paper's Mixing–Expressivity Tradeoff.** Pushing α
+for exactness freezes the chain: at α≥15, TV 0.9997 with **one state visited out of
+16**. Two failure modes cross — below α≈5 the equilibrium is wrong, above it the
+chain never reaches equilibrium. Reached from frozen-transformer attention, a
+different problem than the paper's.
+
+**The attention sink is real and strengthens with sequence length.** Removing the
+absolute sink wires (`n_sink=0`, local window only) costs 339× at S=128 and
+**6576×** at S=1024.
+
+**Three refuted attempts to let the device compute the field itself**, all with
+controls (random-gate control: 620× baseline):
+
+| approach | result |
+|---|---|
+| raw-QK gate, `sigmoid(a·ℓ+b)` | 14.9× — bias-limited, K=8→512 barely moves it |
+| z-score gate | 16–53× |
+| global lateral inhibition | 65–102×, monotonically worse in λ |
+
+Only the **top-k** gate worked (1.21×), and only because `τ` is a per-row statistic —
+the partition function in disguise, which requires the host.
+
+---
+
+## The surviving route
+
+Extropic's own Appendix J (HTDML): a small trained adapter into a binary latent
+space where the DTM **is** the generator, rather than a sampler bolted onto
+irreducible linear algebra. That requires training an adapter — not retraining the
+transformer, but not "strictly frozen" either.
+
+---
+
+## Repository layout
+
+```
+validation/experiments/   every script behind the results below
+validation/results/       measured outputs, dated
+  tsu_attention_20260805.md    <- the full record
+archive/                  quarantined early development (see its README)
 ```
 
----
+## Limits of this evidence
 
-## Quick start
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from thermobridge import bridge_forward
-
-model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.2-3B-Instruct",
-    attn_implementation="eager",
-    torch_dtype="auto",
-    device_map="auto",
-)
-tok = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
-model.eval()
-
-logits = bridge_forward(model, tok, "The thermodynamic basis of intelligence is")
-```
-
-### With diagnostics
-
-```python
-from thermobridge import bridge_forward
-
-result = bridge_forward(
-    model, tok,
-    "The thermodynamic basis of intelligence is",
-    layer_idx=18,
-    alpha=0.3,
-    backend="exact",
-    K=10,
-    return_intermediates=True,
-)
-
-print(f"KL(bridge || vanilla): {result.kl:.4f}")
-print(f"Layer captured: {result.layer_idx}, seq_len: {result.capture.seq_len}")
-```
-
----
-
-## Backends
-
-| Backend | Description | Status |
-|---------|-------------|--------|
-| `exact` | K multinomial draws from softmax(Q·Kᵀ·scale + mask). As K→∞, p\_thermo→softmax. | **Production** |
-| `gumbel` | Gumbel-max trick: K perturbed argmaxes. Mathematically equivalent to `exact`; hardware-natural. | Production |
-| `rbm` | Gibbs-style categorical sampling on the energy landscape. | Research |
-| `thrml` | Extropic THRML block-Gibbs Boltzmann sampler. Requires `pip install thrml`. Hardware path for TSU. | Hardware-ready |
-
-**Production config** (validated): `layer_idx=18, alpha=0.3, backend='exact', K=10`
-
----
-
-## Validation
-
-All results in `validation/results/`. Validated on LLaMA 3.2-3B and OLMoE-1B-7B.
-
-| Test | Result | Threshold |
-|------|--------|-----------|
-| T1.C Per-head KL fidelity (4 backends × 4 prompts) | All PASS | std(KL/head) < 0.001 |
-| T1.D K-convergence (KL ∝ 1/K, R²) | R² = 0.998 | > 0.95 |
-| T2.B Gibbs chain mixing (R-hat) | R-hat = 1.0003 | < 1.01 |
-| T2.C Detailed balance (chi-squared) | p = 0.43 | > 0.05 |
-| T3 Perplexity on LLaMA 3.2-3B | ΔPPL = +0.0114 nats | < 0.05 |
-| T5 Perplexity on OLMoE-1B-7B | ΔPPL = +0.0009 nats | < 0.05 |
-
----
+GPT-2 small only; one 512-token text; perplexity only. The per-p-bit-update energy
+figure (~0.49 fJ) is **backed out** of the paper's Appendix E.4, not measured.
+The THRML validation covers the flat m=16 RBM, not the full tree. Not ported to a
+torx `DFG`. No TSU silicon exists to test on — everything here is simulation, as in
+the paper.
 
 ## Citation
-
-If you use thermobridge in your research, please cite:
 
 ```bibtex
 @misc{shaver2026thermobridge,
@@ -112,21 +148,16 @@ If you use thermobridge in your research, please cite:
   publisher = {GitHub},
   url       = {https://github.com/whtetigr2/TASB}
 }
-
-@patent{shaver2026provisional,
-  author    = {Shaver, Paul W.},
-  title     = {Thermodynamic Attention Sampling Bridge for Transformer Models},
-  number    = {64/019,999},
-  type      = {U.S. Provisional Patent Application},
-  year      = {2026},
-  month     = {March}
-}
 ```
 
----
+Primary source for all hardware constraints and energy figures used above:
+A. Jelinčič et al., *An efficient probabilistic hardware architecture for
+diffusion-like models*, [arXiv:2510.23972](https://arxiv.org/abs/2510.23972).
 
 ## License
 
 MIT — see [LICENSE](LICENSE)
 
-Patent Pending: USPTO Provisional 64/019,999 (filed 2026-03-28).
+Patent Pending: USPTO Provisional 64/019,999 (filed 2026-03-28). Retained as a record
+of filing; note that the energy conclusion above bears on the scope of what the
+disclosed approach can deliver.
