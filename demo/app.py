@@ -3,8 +3,9 @@ thermobridge — Gradio demo
 https://github.com/whtetigr2/TASB
 
 Tab 1: Synthetic Boltzmann Bridge — CPU animated Gibbs chain + interactive Plotly.
-Tab 2: Real LLaMA Profile — measured thermodynamic landscape, LLaMA 3.2-3B on A100.
-Tab 3: About / Whitepaper.
+Tab 2: Real Attention Viewer — actual per-token softmax attention matrices, all 5 prompts.
+Tab 3: Real LLaMA Profile — measured thermodynamic landscape, LLaMA 3.2-3B on A100.
+Tab 4: About / Whitepaper.
 
 © 2026 Paul W. Shaver. USPTO Provisional 64/019,999.
 """
@@ -36,6 +37,21 @@ except Exception as _err:
     _PROMPTS_AVAIL = ["factual", "code", "reasoning", "creative", "mathematical"]
     _DATA_OK = False
     print(f"[demo] Sweep data not loaded: {_err}")
+
+# Attention matrices (S×S per head/layer) — from tasb_attention_capture.py
+_ATTN_DATA_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "attention_matrices.json"
+)
+try:
+    with open(_ATTN_DATA_PATH) as _f:
+        _attn_data = json.load(_f)
+    _ATTN_PROMPTS = list(_attn_data.keys())
+    _ATTN_OK = True
+except Exception as _err:
+    _attn_data = None
+    _ATTN_PROMPTS = ["factual", "code", "reasoning", "creative", "mathematical"]
+    _ATTN_OK = False
+    print(f"[demo] Attention matrices not loaded: {_err}")
 
 PROMPT_COLORS = {
     "factual":      "#ffaa00",
@@ -72,6 +88,14 @@ METRIC_DESC = {
     "kl":      "KL(softmax ‖ p_thermo) at K=10 — finite-sample fidelity error",
     "entropy": "Shannon entropy H = −Σ p log p of softmax (nats)",
     "p_max":   "max(softmax) — attention concentration per head",
+}
+
+PROMPT_TEXT = {
+    "factual":      "The capital of France is Paris. The capital of Germany is",
+    "code":         "def fibonacci(n): if n <= 1: return n else: return fibonacci",
+    "reasoning":    "All mammals are warm-blooded. Whales are mammals. Therefore,",
+    "creative":     "In the year 2150, when gravity was finally understood as",
+    "mathematical": "The Riemann zeta function zeta(s) has non-trivial zeros at s =",
 }
 
 
@@ -460,6 +484,76 @@ def make_scatter_fig() -> go.Figure:
 
 
 # ---------------------------------------------------------------------------
+# Tab 2 — Real Attention Viewer (per-token S×S matrices)
+# ---------------------------------------------------------------------------
+
+def make_attention_matrix_fig(prompt_id: str, layer: int, head: int) -> go.Figure:
+    """Softmax attention heatmap with real token strings on both axes."""
+    if _attn_data is None:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(
+                text="Attention matrices not yet loaded — capture still running on Lightning.ai",
+                font=dict(color="#cc8800", size=12),
+            ),
+            **_PLOT_BASE,
+            height=500,
+        )
+        return fig
+
+    data   = _attn_data[prompt_id]
+    tokens = data["tokens"]
+    mat    = np.array(data["layers"][str(layer)]["heads"][str(head)])  # (S, S)
+    label  = PROMPT_LABELS.get(prompt_id, prompt_id)
+
+    fig = go.Figure(go.Heatmap(
+        z=mat,
+        x=tokens,
+        y=tokens,
+        colorscale="Plasma",
+        hovertemplate=(
+            "Query:  <b>%{y}</b><br>"
+            "Key:    <b>%{x}</b><br>"
+            "p(attn) = %{z:.4f}<extra></extra>"
+        ),
+        colorbar=dict(
+            thickness=14,
+            title=dict(text="p(attn)", font=dict(color="#886633", size=9)),
+            tickfont=dict(color="#886633", size=9),
+            outlinecolor="#2a1500",
+        ),
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Softmax attention matrix  ·  {label}  ·  Layer {layer}  ·  Head {head}",
+            font=dict(color="#cc8800", size=12),
+        ),
+        xaxis=dict(
+            title="Key token (attended to →)",
+            tickfont=dict(color="#c4944a", size=10),
+            tickangle=-40,
+            gridcolor="#1a0e00",
+        ),
+        yaxis=dict(
+            title="← Query token (attending from)",
+            tickfont=dict(color="#c4944a", size=10),
+            gridcolor="#1a0e00",
+            autorange="reversed",
+        ),
+        height=520,
+        **_PLOT_BASE,
+    )
+    return fig
+
+
+def update_attention_viewer(prompt_id: str, layer: int, head: int):
+    fig  = make_attention_matrix_fig(prompt_id, int(layer), int(head))
+    text = f"**Prompt:** `{PROMPT_TEXT.get(prompt_id, prompt_id)}`"
+    return fig, text
+
+
+# ---------------------------------------------------------------------------
 # TechnoPunk black-and-gold CSS theme
 # ---------------------------------------------------------------------------
 
@@ -559,7 +653,46 @@ footer { display: none !important; }
 
 
 # ---------------------------------------------------------------------------
-# Header HTML — gold glow wordmark
+# Hero HTML — animated canvas (THERMOBRIDGE crystallising from energy landscape)
+# Script-free; animation JS is injected via GIBBS_JS (js= param of gr.Blocks)
+# ---------------------------------------------------------------------------
+
+HERO_HTML = """
+<div style="
+    text-align:center;
+    padding:0 0 0;
+    border-bottom:1px solid #2a1500;
+    margin-bottom:4px;
+    background:#0a0600;
+">
+  <canvas id="tbhc" style="width:100%;height:200px;display:block;"></canvas>
+  <div style="
+      font-family:'Courier New',monospace;
+      font-size:11px;
+      color:#aa7744;
+      letter-spacing:0.24em;
+      text-transform:uppercase;
+      margin-bottom:10px;
+  ">thermodynamic attention sampling &nbsp;·&nbsp; boltzmann vs softmax</div>
+  <div style="
+      font-family:monospace;
+      font-size:10px;
+      color:#7a5533;
+      letter-spacing:0.08em;
+      padding-bottom:20px;
+  ">
+    Patent Pending &nbsp;·&nbsp; USPTO Provisional 64/019,999 &nbsp;·&nbsp;
+    <a href="https://github.com/whtetigr2/TASB"
+       style="color:#aa7744;text-decoration:none;border-bottom:1px solid #553322;">
+      GitHub ↗
+    </a>
+  </div>
+</div>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Header HTML — gold glow wordmark (kept as fallback / reference)
 # ---------------------------------------------------------------------------
 
 HEADER_HTML = """
@@ -662,6 +795,129 @@ LLAMA_HEADER_HTML = """
 
 GIBBS_JS = """
 () => {
+    // ── Hero canvas: THERMOBRIDGE crystallising from energy landscape ─────
+    (function(){
+      var hGen = (window.__tbHGen = (window.__tbHGen||0)+1);
+      function tryHero(){
+        var cv = document.getElementById('tbhc');
+        if(!cv || cv.offsetWidth < 10){ requestAnimationFrame(tryHero); return; }
+        tbHero(cv, hGen);
+      }
+      requestAnimationFrame(tryHero);
+
+      function tbHero(canvas, gen){
+        var ctx = canvas.getContext('2d');
+        var LOOP = 9000;
+        var t0 = null, W, H, dots, parts, rTimer;
+
+        function lY(x, off){
+          return H*0.72
+            + Math.sin(x/W*Math.PI*3 + off)*H*0.07
+            + Math.sin(x/W*Math.PI*7 + off*1.4)*H*0.03
+            + Math.sin(x/W*Math.PI*1.5 + off*0.6)*H*0.05;
+        }
+
+        function getDots(){
+          var oc=document.createElement('canvas'); oc.width=W; oc.height=H;
+          var ox=oc.getContext('2d');
+          var fs=Math.min(H*0.48, W/9.5);
+          ox.fillStyle='#fff';
+          ox.font='900 '+fs+'px "Courier New",monospace';
+          ox.textAlign='center'; ox.textBaseline='middle';
+          ox.fillText('THERMOBRIDGE', W/2, H/2);
+          var d=ox.getImageData(0,0,W,H).data, res=[];
+          var step=Math.max(4,Math.round(fs/15));
+          for(var y=0;y<H;y+=step) for(var x=0;x<W;x+=step)
+            if(d[(y*W+x)*4+3]>100)
+              res.push({x:x+(Math.random()-.5)*step*.4,
+                        y:y+(Math.random()-.5)*step*.4});
+          return res;
+        }
+
+        function build(){
+          W=canvas.offsetWidth||900; H=200;
+          canvas.width=W; canvas.height=H;
+          dots=getDots(); parts=[];
+          var n=dots.length+80;
+          for(var i=0;i<n;i++){
+            var L=i<dots.length, bx=Math.random()*W, ph=Math.random()*Math.PI*2;
+            parts.push({bx:bx,by:0,ph:ph,
+              tx:L?dots[i].x:bx, ty:L?dots[i].y:0,
+              cx:bx,cy:0,sz:1.4+Math.random()*1.6,
+              al:0.35+Math.random()*0.65,L:L});
+          }
+        }
+        build();
+
+        window.addEventListener('resize', function(){
+          if(window.__tbHGen!==gen) return;
+          clearTimeout(rTimer);
+          rTimer=setTimeout(function(){build();},200);
+        });
+
+        function ease(t){return t<.5?2*t*t:-1+(4-2*t)*t;}
+        function lerp(a,b,t){return a+(b-a)*t;}
+
+        function frame(ts){
+          if(window.__tbHGen!==gen) return;
+          requestAnimationFrame(frame);
+          if(!t0) t0=ts;
+          var el=(ts-t0)%LOOP, prog=el/LOOP, toff=el/2000;
+          var mode,bl;
+          if(prog<0.12)      {mode=0;bl=1;}
+          else if(prog<0.42) {mode=1;bl=ease((prog-.12)/.30);}
+          else if(prog<0.62) {mode=2;bl=1;}
+          else if(prog<0.82) {mode=3;bl=ease((prog-.62)/.20);}
+          else               {mode=0;bl=1;}
+
+          ctx.fillStyle='#0a0600'; ctx.fillRect(0,0,W,H);
+
+          var i,p;
+          for(i=0;i<parts.length;i++){
+            p=parts[i]; p.by=lY(p.bx,p.ph+toff);
+            if(!p.L) p.ty=p.by;
+            if(mode===0)      {p.cx=p.bx;p.cy=p.by;}
+            else if(mode===1) {p.cx=p.L?lerp(p.bx,p.tx,bl):p.bx; p.cy=p.L?lerp(p.by,p.ty,bl):p.by;}
+            else if(mode===2) {p.cx=p.L?p.tx:p.bx; p.cy=p.L?p.ty:p.by;}
+            else              {p.cx=p.L?lerp(p.tx,p.bx,bl):p.bx; p.cy=p.L?lerp(p.ty,p.by,bl):p.by;}
+          }
+
+          // Connections (capped at 600)
+          var MAX=600,drawn=0,D2=70*70; ctx.lineWidth=0.6;
+          outer:for(var a=0;a<parts.length;a++){
+            var pa=parts[a];
+            for(var b=a+1;b<parts.length;b++){
+              if(drawn>=MAX) break outer;
+              var pb=parts[b], dx=pa.cx-pb.cx, dy=pa.cy-pb.cy, d2=dx*dx+dy*dy;
+              if(d2<D2){
+                ctx.strokeStyle='rgba(204,119,0,'+(1-Math.sqrt(d2)/70)*.32+')';
+                ctx.beginPath();ctx.moveTo(pa.cx,pa.cy);ctx.lineTo(pb.cx,pb.cy);ctx.stroke();
+                drawn++;
+              }
+            }
+          }
+
+          // Particles with radial glow
+          var pulse=mode===2?Math.sin(toff*6)*.2:0;
+          for(i=0;i<parts.length;i++){
+            p=parts[i];
+            var al=Math.min(1,p.al+(p.L&&mode===2?pulse:0));
+            var r=p.sz*(1+(p.L&&mode===2?pulse*.4:0));
+            var gr=ctx.createRadialGradient(p.cx,p.cy,0,p.cx,p.cy,r*5);
+            gr.addColorStop(0,'rgba(255,200,80,'+al+')');
+            gr.addColorStop(.4,'rgba(204,119,0,'+(al*.35)+')');
+            gr.addColorStop(1,'rgba(0,0,0,0)');
+            ctx.fillStyle=gr;
+            ctx.beginPath();ctx.arc(p.cx,p.cy,r*5,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle='rgba(255,220,100,'+al+')';
+            ctx.beginPath();ctx.arc(p.cx,p.cy,r,0,Math.PI*2);ctx.fill();
+          }
+        }
+        requestAnimationFrame(frame);
+      }
+    })();
+
+    // ── Gibbs chain animation ─────────────────────────────────────────────
     window.__tcGen = 0;
 
     window.startGibbsAnim = function(root) {
@@ -1106,7 +1362,7 @@ with gr.Blocks(
     js=GIBBS_JS,
 ) as demo:
 
-    gr.HTML(HEADER_HTML)
+    gr.HTML(HERO_HTML)
 
     with gr.Tabs():
 
@@ -1154,7 +1410,42 @@ with gr.Blocks(
             plot_out  = gr.Plot(label="Analysis (interactive)")
             stats_out = gr.Markdown()
 
-        # ── Tab 2: Real LLaMA Profile ─────────────────────────────────────────
+        # ── Tab 2: Real Attention Viewer ─────────────────────────────────────
+        with gr.Tab("Real Attention Viewer"):
+            gr.Markdown(
+                "Actual per-token softmax attention matrices from frozen **LLaMA 3.2-3B** "
+                "captured on A100 — real tokenization, real weights, no synthetic data. "
+                "Token strings from real tokenization appear on both axes so you can see "
+                "exactly which tokens attend to which tokens at every layer and head."
+            )
+
+            with gr.Row():
+                attn_prompt_sel = gr.Radio(
+                    choices=_ATTN_PROMPTS,
+                    value=_ATTN_PROMPTS[0] if _ATTN_PROMPTS else "factual",
+                    label="Prompt",
+                    info="5 linguistic domains — each shows different attention structure",
+                )
+                with gr.Column():
+                    attn_layer_sel = gr.Slider(
+                        0, 27, value=9, step=1,
+                        label="Layer",
+                        info="Layer 9 = peak thermodynamic activity (highest mean Cv across prompts)",
+                    )
+                    attn_head_sel = gr.Slider(
+                        0, 23, value=0, step=1,
+                        label="Head",
+                        info="24 heads per layer — each specializes in different token relationships",
+                    )
+
+            attn_prompt_text = gr.Markdown(
+                f"**Prompt:** `{PROMPT_TEXT.get(_ATTN_PROMPTS[0] if _ATTN_PROMPTS else 'factual', '')}`"
+            )
+            attn_matrix_out = gr.Plot(
+                label="Attention matrix — hover any cell for exact token pair + weight"
+            )
+
+        # ── Tab 3: Real LLaMA Profile ─────────────────────────────────────────
         with gr.Tab("Real LLaMA Profile"):
             gr.HTML(LLAMA_HEADER_HTML)
             gr.Markdown(
@@ -1183,7 +1474,7 @@ with gr.Blocks(
                 profile_out = gr.Plot(label="Layer Cv profile — all 5 prompts")
                 scatter_out = gr.Plot(label="Cv × KL scatter — layer 18  (r = 0.8241)")
 
-        # ── Tab 3: About ──────────────────────────────────────────────────────
+        # ── Tab 4: About ──────────────────────────────────────────────────────
         with gr.Tab("About / Whitepaper"):
             gr.Markdown(ABOUT_MD)
 
@@ -1193,22 +1484,33 @@ with gr.Blocks(
 
     run_btn.click(fn=run_demo, inputs=_t1_inputs, outputs=_t1_outputs)
 
-    # ── Tab 2 event wiring ────────────────────────────────────────────────────
+    # ── Tab 2 event wiring (Real Attention Viewer) ───────────────────────────
+    _attn_inputs  = [attn_prompt_sel, attn_layer_sel, attn_head_sel]
+    _attn_outputs = [attn_matrix_out, attn_prompt_text]
+
+    attn_prompt_sel.change(fn=update_attention_viewer, inputs=_attn_inputs, outputs=_attn_outputs)
+    attn_layer_sel.change(fn=update_attention_viewer,  inputs=_attn_inputs, outputs=_attn_outputs)
+    attn_head_sel.change(fn=update_attention_viewer,   inputs=_attn_inputs, outputs=_attn_outputs)
+
+    # ── Tab 3 event wiring (Real LLaMA Profile) ──────────────────────────────
     prompt_sel.change(fn=update_llama_tab, inputs=[prompt_sel, metric_sel], outputs=[heatmap_out])
     metric_sel.change(fn=update_llama_tab, inputs=[prompt_sel, metric_sel], outputs=[heatmap_out])
 
-    # ── Page load: initialize both tabs ──────────────────────────────────────
+    # ── Page load: initialize all tabs ───────────────────────────────────────
     def _on_load(seq_len, K, backend, energy, temp, seed, speed):
-        t1 = run_demo(seq_len, K, backend, energy, temp, seed, speed)
+        t1       = run_demo(seq_len, K, backend, energy, temp, seed, speed)
+        attn_fig, attn_txt = update_attention_viewer(
+            _ATTN_PROMPTS[0] if _ATTN_PROMPTS else "factual", 9, 0
+        )
         hm = make_heatmap_fig(_PROMPTS_AVAIL[0] if _PROMPTS_AVAIL else "factual", "cv")
         lp = make_layer_profile_fig()
         sc = make_scatter_fig()
-        return (*t1, hm, lp, sc)
+        return (*t1, attn_fig, attn_txt, hm, lp, sc)
 
     demo.load(
         fn=_on_load,
         inputs=_t1_inputs,
-        outputs=[*_t1_outputs, heatmap_out, profile_out, scatter_out],
+        outputs=[*_t1_outputs, attn_matrix_out, attn_prompt_text, heatmap_out, profile_out, scatter_out],
     )
 
 if __name__ == "__main__":

@@ -1,0 +1,721 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{natbib}
+
+\geometry{margin=1.25in}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black
+}
+
+\lstset{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  framerule=0.4pt,
+  breaklines=true,
+  showstringspaces=false,
+  language=Python,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{gray},
+  stringstyle=\color{green!50!black}
+}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+
+\title{\textbf{TASB: Thermodynamic Attention Sampling Bridge}\\[0.5em]
+\large You Do Not Need to Rebuild the Model}
+
+\author{Paul White\\[0.3em]
+\small Independent Researcher\\
+\small \href{mailto:whtetigr2@gmail.com}{whtetigr2@gmail.com}\\[0.3em]
+\small \textit{Patent Pending~$\cdot$~USPTO Provisional 64/019,999~$\cdot$~March 28, 2026}\\
+\small \textit{Code: \url{https://github.com/whtetigr2/thermobridge}}\\
+\small \textit{Demo: \url{https://huggingface.co/spaces/shvrpws/thermobridge}}
+}
+
+\date{July 2, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We show that scaled dot-product attention is not \emph{analogous} to a
+Boltzmann distribution --- it \emph{is} one, exactly. The scaling factor
+$1/\sqrt{d_k}$ is the inverse temperature; the dot-product scores are negative
+energies; softmax is the partition-function normalization. Three independent
+proofs (maximum entropy variational principle, Kim's thermodynamic Lagrangian
+\citep{kim2026thermodynamic}, and the Kajitsuka--Sato Boltzmann operator theorem
+\citep{kajitsuka2024transformers}) converge on this identity from different
+starting points.
+
+This identity enables a bridge: the Thermodynamic Attention Sampling Bridge
+(TASB) intercepts the attention computation at inference time, samples $K$
+draws from the Boltzmann distribution defined by the frozen weights, and
+routes the result to thermodynamic hardware (Extropic TSU) without any
+retraining or weight modification. Validated on LLaMA~3.2-3B: 98.9\% top-1
+agreement at $K=10$, zero confident flips across all 28 layers and all tested
+$\alpha \in [0,1]$, and a $1.81\times$ compute overhead.
+
+The bridge also exposes a thermodynamic specific heat observable $C_v =
+\mathrm{Var}_\rho(\mathcal{H})$, computable in one line of Python at zero
+additional cost. Empirically: $r(C_v, \mathrm{KL}) = 0.824$ ($p = 6.1 \times
+10^{-25}$) at layer 18; Shannon entropy is a stronger predictor ($r = 0.95$
+population-wide). Both are architecture-agnostic: verified across LLaMA 3.2-3B
+(Meta, GQA) and Phi-3-mini-4k (Microsoft, full MHA) in 30,720 observations,
+directly answering the single-model-family skeptic objection.
+
+Additional results: (1) $T = \sqrt{d_k}$ is the exact theoretical temperature,
+confirmed via ablation with KL minimum at exactly that value; (2) ZOH
+discretization in Mamba is the FDT-exact choice (bilinear introduces an
+$O(\Delta^3)$ violation); (3) NTK-aware RoPE context extension is a Jarzynski
+protocol with measurable per-head dissipated work $W_\mathrm{diss} = T \cdot
+\mathrm{KL}(p_\mathrm{orig} \| p_\mathrm{NTK})$, $r(\Delta C_v, W_\mathrm{KL})
+= 0.549$.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+Modern GPU inference is extraordinarily wasteful --- not by engineering
+standards, but by physical law. The Landauer limit \citep{landauer1961irreversibility}
+establishes the minimum energy required to perform one irreversible bit
+operation: $kT \ln 2 \approx 2.8 \times 10^{-21}$~J at room temperature.
+A modern GPU consumes roughly $10^{-12}$~J per floating-point operation.
+The ratio is approximately $10^{12}$.
+
+This gap is not an engineering problem. It is architectural. GPUs are optimized
+for deterministic, differentiable arithmetic --- the exact opposite of what
+physics naturally does cheaply. Thermodynamic hardware (Extropic's TSU,
+Normal Computing's SPU) is built from the physics up, targeting near-Landauer
+stochastic sampling \citep{extropic_tsu101}. These are not theoretical devices:
+Extropic's DTM architecture operates in subthreshold CMOS using standard
+fabrication, consuming approximately 2~fJ per sampling step.
+
+The stated obstacle to running transformers on thermodynamic hardware has been
+the bridge: transformer weights are trained assuming deterministic softmax;
+thermodynamic hardware performs stochastic Boltzmann sampling. Moving to
+stochastic hardware would seem to require retraining from scratch.
+
+The premise is wrong. The bridge is mathematical, not architectural. Softmax
+\emph{is} the Boltzmann distribution. The 1/√$d_k$ scaling factor in scaled
+dot-product attention \citep{vaswani2017attention} is the thermodynamic inverse
+temperature. The mathematics has been embedded in every transformer since 2017.
+
+In February 2026, Gunn Kim \citep{kim2026thermodynamic} proved that the full
+transformer forward pass emerges from a thermodynamic Lagrangian. The
+Lagrangian is conditionally unique --- fixed by Chentsov's theorem on the
+Fisher--Rao metric and the Shore--Johnson axioms on Shannon entropy
+\citep{shore1980axiomatic, chentsov1982statistical}. This means softmax is
+not one of many possible equilibria; within the Shannon--Boltzmann framework
+it is the \emph{only} equilibrium. TASB is the hardware implementation of
+that identity.
+
+\paragraph{Summary of contributions.}
+\begin{enumerate}[nosep]
+  \item Three independent proofs of the softmax--Boltzmann identity (\S\ref{sec:identity}).
+  \item An inference-time bridge routing frozen transformers to TSU hardware
+        with zero retraining, validated at 98.9\% top-1 agreement and zero
+        confident flips (\S\ref{sec:bridge}).
+  \item A per-head thermodynamic specific heat observable $C_v$ computable
+        at zero additional cost; $r(C_v,\mathrm{KL})=0.824$,
+        $r(H,\mathrm{KL})=0.95$ (\S\ref{sec:observable}).
+  \item Formal hardware compatibility proof from Extropic's own documentation;
+        software validation via THRML API (\S\ref{sec:hardware}).
+  \item ZOH as the FDT-exact discretization for Mamba-class SSMs;
+        NTK-aware RoPE as a Jarzynski protocol with measurable per-head cost (\S\ref{sec:physics}).
+  \item Cross-architecture validation across two model families (LLaMA 3.2-3B
+        and Phi-3-mini-4k), 30,720 observations (\S\ref{sec:experiments}).
+\end{enumerate}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The Boltzmann Identity}
+\label{sec:identity}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+The scaled dot-product attention weight for token $i$ is:
+\begin{equation}
+  p_i = \frac{\exp(q^\top k_i / \sqrt{d_k})}{\sum_j \exp(q^\top k_j / \sqrt{d_k})}
+  \label{eq:softmax}
+\end{equation}
+
+This is the Boltzmann distribution $p_i = e^{-E_i/kT}/Z$ under the identification:
+\begin{align}
+  E_i &= -q^\top k_i \quad \text{(negative dot product = negative energy)} \\
+  kT &= \sqrt{d_k} \quad \text{(scaling factor = inverse temperature)} \\
+  Z &= \textstyle\sum_j \exp(q^\top k_j / \sqrt{d_k}) \quad \text{(partition function)}
+\end{align}
+
+We prove this identification three independent ways.
+
+\subsection{Proof 1 --- Maximum Entropy Variational Principle}
+
+The Boltzmann distribution is the unique probability distribution maximizing
+Shannon entropy subject to a fixed mean energy. Applying the MaxEnt variational
+principle to the attention energy landscape $\mathcal{H}_{ij} = -q_i^\top k_j /
+\sqrt{d_k}$ yields Eq.~\eqref{eq:softmax} exactly via Euler--Lagrange equations.
+No approximation.
+
+\subsection{Proof 2 --- Kim's Thermodynamic Lagrangian}
+
+\citet{kim2026thermodynamic} derives the full transformer forward pass from a
+thermodynamic Lagrangian. The Lagrangian is \emph{conditionally unique}:
+
+\begin{itemize}[nosep]
+  \item \textbf{Chentsov's theorem} \citep{chentsov1982statistical}: the Fisher--Rao
+    metric is the \emph{only} Riemannian metric on the statistical manifold invariant
+    under sufficient statistics transformations. This fixes the kinetic term uniquely.
+  \item \textbf{Shore--Johnson axioms} \citep{shore1980axiomatic}: Shannon entropy is
+    the \emph{only} additive, consistent entropy functional. This fixes the potential
+    term uniquely.
+\end{itemize}
+
+Uniqueness means softmax is not one of many possible equilibria --- it is the only
+equilibrium within the Shannon--Boltzmann framework. Kim's paper was submitted
+February~9, 2026 --- 47 days before the TASB patent filing (March~28, 2026).
+Kim provides the theoretical framework; TASB is the hardware implementation.
+
+\subsection{Proof 3 --- Kajitsuka--Sato Boltzmann Operator}
+
+\citet{kajitsuka2024transformers} prove that the softmax contextual map is a
+Boltzmann operator in the representation-theoretic sense: for any energy matrix
+$J$, the map $a \mapsto \sigma_s[a]$ is exactly the Boltzmann distribution with
+energy $-J$. Their Lemma~1 and Theorem~2 are directly applicable to TASB's
+attention energy landscape. Kim and K\&S are independent: Kim does not cite K\&S
+(verified across all 44 citations in \citep{kim2026thermodynamic}), yet both
+arrive at the same Boltzmann distribution via different routes.
+
+\subsection{What Uniqueness Means for Alternatives}
+
+$\alpha$-entmax \citep{peters2019sparse} is the inference-time instantiation of
+Tsallis $q$-entropy --- a \emph{different} statistical mechanical framework.
+Because Kim's Lagrangian is unique within the Shannon--Boltzmann framework,
+$\alpha$-entmax and TASB provably sample from different equilibria.
+
+Empirically confirmed: $\mathrm{KL}(\mathrm{entmax}_{1.5} \| \mathrm{softmax})
+= 0.109 \pm 0.070$ across 120 head$\times$prompt combinations (LLaMA 3.2-3B,
+layer 18, 5 prompts $\times$ 24 heads). Every single head shows $\mathrm{KL}>0$.
+The distributions are distinct in practice, on real model weights, with effect
+sizes ranging 0.005--0.37 nats.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The Bridge}
+\label{sec:bridge}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+TASB intercepts the attention computation after $Q$, $K$, $V$ are computed but
+before the softmax output is returned. It samples $K$ draws from the Boltzmann
+distribution defined by $\mathcal{H} = -QK^\top/\sqrt{d_k}$, averages them,
+blends the result with the original softmax weights at mixing coefficient $\alpha$,
+then recomputes the value projection:
+
+\begin{lstlisting}[language=Python, caption={TASB bridge (conceptual)}]
+energy = -(Q @ K.T) / sqrt(dk)          # H_ij = -q_i * k_j / sqrt(dk)
+p_boltzmann = boltzmann_sample(energy, K=10)   # K independent draws
+p_blended = (1 - alpha) * p_softmax + alpha * p_boltzmann
+attn_output = p_blended @ V
+\end{lstlisting}
+
+No gradients. No weight modification. No retraining. The weights stay frozen.
+
+\subsection{Validated Results}
+
+Table~\ref{tab:bridge_results} reports measurements on LLaMA~3.2-3B
+\citep{metaai_llama32} (4-bit nf4, $d_k=128$, 24 heads, 28 layers).
+
+\begin{table}[h]
+\centering
+\caption{Core bridge validation results (LLaMA 3.2-3B, layer 18, 5 prompts).}
+\label{tab:bridge_results}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Metric & Condition & Value \\
+\midrule
+$\mathrm{KL}(p_\text{bridge} \| p_\text{softmax})$ & $K=10$, $\alpha=1.0$ (full substitution) & $1.72$ (mean)$^\dagger$ \\
+$\mathrm{KL}(p_\text{bridge} \| p_\text{softmax})$ & $K=5000$, $\alpha=1.0$ (convergence test) & $<0.002$ \\
+$\mathrm{KL}(p_\text{blended} \| p_\text{softmax})$ & $K=10$, $\alpha=0.3$ (production) & $\approx 0.001$ \\
+Top-1 agreement & $K=10$, $\alpha=1.0$ & 98.9\% \\
+Confident flips & any layer, any $K$, any $\alpha$ & 0 \\
+Compute overhead & --- & $1.81\times$ \\
+Valid injection layers & --- & All 28 (L0--L27) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent$\dagger$ Finite-$K$ Monte Carlo sampling noise, not a sampler error.
+$\mathrm{KL} \propto K^{-0.94}$ ($R^2=0.94$) --- the sampler converges to the
+correct Boltzmann distribution as $K$ increases. The behavioral invariant at
+$K=10$ is zero confident flips, not low KL. The $K=5000$ row establishes
+distributional correctness; the $\alpha=0.3$ row shows production blend fidelity
+(70\% softmax + 30\% thermodynamic sample).
+
+\subsection{\texorpdfstring{$T = \sqrt{d_k}$ is Exact, Not Conventional}{T = sqrt(dk) is Exact, Not Conventional}}
+
+The temperature $T = \sqrt{d_k}$ in TASB is derived directly from the attention
+Hamiltonian, not chosen as a convention. Confirmed experimentally via ablation
+across $T \in \{0.09\sqrt{d_k},\ldots,8\sqrt{d_k}\}$ on 120 head$\times$prompt
+combinations:
+
+\begin{table}[h]
+\centering
+\caption{Temperature ablation. KL minimum is at the exact theoretical temperature.}
+\label{tab:temperature}
+\begin{tabular}{@{}rrr@{}}
+\toprule
+$T$ & $T/\sqrt{d_k}$ & Mean KL to Boltzmann \\
+\midrule
+5.66 & $0.5\times$ & 0.087 \\
+\textbf{11.31} ($\sqrt{d_k}$) & $\mathbf{1.0\times}$ & $\mathbf{<10^{-6}}$ \\
+22.63 & $2.0\times$ & 0.381 \\
+45.25 & $4.0\times$ & 1.247 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Over-smoothing ($T > \sqrt{d_k}$) is $4.4\times$ more costly than equivalent
+over-sharpening. The practical implication: do not adjust $T$. The physics
+already chose it.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The Observable: Thermodynamic Specific Heat}
+\label{sec:observable}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+TASB exposes a thermodynamic specific heat observable as a side effect of the
+bridge computation. For an attention head with distribution $\rho$ over energy
+landscape $\mathcal{H}$:
+
+\begin{equation}
+  C_v = \mathrm{Var}_\rho(\mathcal{H}) = \mathbb{E}_\rho[\mathcal{H}^2] - \mathbb{E}_\rho[\mathcal{H}]^2
+  = \sum_i p_i \!\left(\frac{q^\top k_i}{\sqrt{d_k}}\right)^{\!2}
+  - \left(\sum_i p_i \frac{q^\top k_i}{\sqrt{d_k}}\right)^{\!2}
+  \label{eq:cv}
+\end{equation}
+
+This is computable in one line from the bridge state, at zero additional cost:
+
+\begin{lstlisting}[language=Python, caption={Specific heat from bridge state.}]
+cv = (p * scores**2).sum(-1) - (p * scores).sum(-1)**2
+\end{lstlisting}
+
+$C_v$ measures the thermal spread of the attention distribution over its energy
+landscape. High $C_v$: diffuse, thermodynamically active head, spreading attention
+broadly. Low $C_v$: sharp, confident retrieval head. This is the same quantity
+\citet{kim2026thermodynamic} derives as the specific heat of the attention
+thermodynamic system.
+
+\subsection{Empirical Results}
+
+From 3,360 total observations (5 prompts $\times$ 28 layers $\times$ 24 heads,
+LLaMA~3.2-3B), restricting to layer~18 ($n=120$, $K=10$, $\alpha=1.0$):
+\begin{equation}
+  r(C_v,\, \mathrm{KL}_\mathrm{TASB}) = 0.8241,\quad p = 6.1 \times 10^{-25}
+\end{equation}
+
+Shannon entropy $H(P) = -\sum_i p_i \log p_i$ is a stronger predictor (Table~\ref{tab:predictors}).
+
+\begin{table}[h]
+\centering
+\caption{$C_v$ vs.\ Shannon entropy as KL predictors (LLaMA 3.2-3B).}
+\label{tab:predictors}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Observable & $r$ at layer~18 ($n=120$) & $r$ population-wide ($n=672$) \\
+\midrule
+$C_v = \mathrm{Var}_\rho(\mathcal{H})$ & 0.8241 & 0.6097 \\
+Shannon entropy $H(P)$ & 0.9279 & 0.9492 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Entropy is more accurate and more stable across the full model. $C_v$'s advantage
+is not predictive power but physical grounding: $C_v = \mathrm{Var}_\rho(\mathcal{H})$
+is the natural vocabulary of Extropic's hardware architecture, and the same quantity
+Kim derives as the thermodynamic specific heat of the attention system. Both are
+computable from the bridge state in a single line at zero additional cost.
+
+\subsection{The Universal Predictor Result}
+
+Running the same experiment against $\alpha$-entmax divergence (a different statistical
+mechanics) rather than finite-$K$ TASB sampling:
+\begin{equation}
+  r(C_v,\, \mathrm{KL}_\mathrm{entmax}) = 0.8156
+\end{equation}
+
+Two different approximation schemes, two different theoretical frameworks, the same
+observable $C_v$ predicts both deviations with nearly identical correlation strength.
+$C_v$ is a framework-agnostic predictor of distributional divergence from the
+Gibbs--Boltzmann baseline: whether you are finite-$K$ sampling within the Boltzmann
+framework (TASB) or substituting a Tsallis equilibrium ($\alpha$-entmax), the heads
+that deviate most are the thermodynamically active ones, and $C_v$ identifies them
+before any approximation runs.
+
+\paragraph{Failed predictions (documented).}
+Two predictions made during development failed and are reported:
+(1) $C_v$ does not decrease monotonically with layer depth on a frozen LLaMA model
+--- Kim's ordering result comes from training-time dynamics, a different regime;
+(2) the Gumbel backend does not introduce a $\pi^2/6$ bias --- $C_v$ is computed
+analytically from the softmax distribution, not from Gumbel samples, so the backend
+choice is irrelevant. Both predictions are struck. The surviving result $r=0.824$
+is stronger for having survived the cut.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The Hardware Path}
+\label{sec:hardware}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+The THRML library (Extropic AI) provides a Python API for thermodynamic sampling
+unit hardware. TASB's \texttt{thrml} backend wraps this API directly:
+
+\begin{lstlisting}[language=Python, caption={TASB THRML backend (hardware-ready).}]
+from thrml import CategoricalGibbsConditional
+node = CategoricalGibbsConditional(couplings=J, n_states=S)
+samples = node.sample_states(n_samples=K)
+\end{lstlisting}
+
+The mapping from transformer attention to TSU operation:
+\begin{itemize}[nosep]
+  \item Ising coupling matrix $J_{ij} = q_i \cdot k_j / \sqrt{d_k}$ (attention energy)
+  \item Number of states $S$ = sequence length (attention window)
+  \item Temperature $kT = \sqrt{d_k}$ (exact, from the Hamiltonian)
+  \item Samples $K$ = number of independent draws ($K=10$ for software; $K=50$ recommended for silicon)
+\end{itemize}
+
+The THRML graph structure is critical: \texttt{CategoricalGibbsConditional} nodes
+with $W^2 = 0$ (no within-node coupling) are mathematically independent. One Gibbs
+sweep equals one exact independent draw from the Boltzmann distribution. Zero
+burn-in is required. This is proved, not assumed: ESS $\approx K$ for TASB's
+THRML usage.
+
+\subsection{Formal Compatibility from Extropic's Own Documentation}
+
+The compatibility of TASB with the Extropic TSU is a claim Extropic makes about
+their own hardware \citep{extropic_tsu101, extropic_codon2026}:
+
+\begin{quote}
+\textit{``The inputs to a TSU are parameters that specify the energy function of
+an EBM, and the outputs of a TSU are samples from the defined EBM.''} ---
+Extropic, TSU 101
+\end{quote}
+
+\begin{quote}
+\textit{``By programming the interaction weights between these elements, the chip's
+thermal fluctuations explore the corresponding Boltzmann distribution.''} ---
+Extropic, arXiv:2606.17327
+\end{quote}
+
+TASB's coupling matrix $J[i,j] = q_i \cdot k_j / \sqrt{d_k}$ is an energy-based
+model interaction weight in exactly the sense Extropic describes. No retraining is
+required because the frozen transformer weights already encode the correct
+thermodynamic coupling parameters at inference time.
+
+\subsection{The Landauer Argument}
+
+\begin{table}[h]
+\centering
+\caption{Energy per operation across hardware architectures.}
+\label{tab:landauer}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Architecture & Energy per operation & Ratio to Landauer \\
+\midrule
+Landauer limit (300K) & $2.87 \times 10^{-21}$~J & $1\times$ \\
+Extropic DTM silicon & $\approx 2 \times 10^{-15}$~J & $\sim 10^3\times$ \\
+Modern GPU (fp32) & $\sim 10^{-12}$~J & $\sim 10^6\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gap between GPU and thermodynamic hardware is three orders of magnitude.
+The gap between thermodynamic hardware and the physical limit is three more ---
+and the physics says those three are achievable as fabrication improves.
+
+\subsection{Hardware Compatibility Tiers}
+
+\begin{table}[h]
+\centering
+\caption{Hardware-ready claims (tiered).}
+\label{tab:tiers}
+\begin{tabular}{@{}llp{6cm}l@{}}
+\toprule
+Tier & Claim & Notes & Status \\
+\midrule
+1 & THRML software validates Boltzmann sampling fidelity & KL$<0.002$ at $K=5000$ & \checkmark\ Claimable \\
+2 & TASB $\leftrightarrow$ TSU mathematical compatibility & Proved from Extropic's own docs & \checkmark\ Claimable \\
+3 & \texttt{chip.sample()} API compatibility & Same call signature as \texttt{sample\_states()} & Requires XTR-0 dev kit \\
+4 & Benchmark on physical XTR-0 silicon & --- & Requires partnership \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Extended Thermodynamic Results}
+\label{sec:physics}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{ZOH Is the FDT-Exact Discretization for SSMs}
+
+The SSM literature transitioned from bilinear (Tustin) discretization in
+S4~\citep{gu2021efficiently} to zero-order hold (ZOH) in
+Mamba~\citep{gu2023mamba}. The Mamba paper cites hardware efficiency. ZOH has an
+independent thermodynamic justification.
+
+The overdamped Langevin equation $\dot{x} = Ax + \xi(t)$ with
+fluctuation-dissipation-theorem (FDT) noise $Q = -\theta(A + A^\top)$ has a
+unique steady-state covariance $P = \theta$ (thermal energy), satisfying the
+continuous Lyapunov equation $AP + PA^\top + Q = 0$. Under ZOH discretization,
+the discrete noise covariance is $\bar{Q} = \int_0^\Delta e^{At} Q e^{A^\top t} dt$
+\citep{vanloan1978computing}. The discrete Lyapunov equation
+$\bar{A}P\bar{A}^\top - P + \bar{Q} = 0$ holds for the \emph{same} covariance
+$P$. ZOH preserves the equilibrium thermal covariance \emph{exactly} --- zero
+residual, not $O(\Delta^n)$ approximation.
+
+The bilinear (Tustin) discretization introduces a leading-order FDT violation.
+In the scalar case ($a < 0$):
+\begin{equation}
+  \text{Bilinear FDT residual} = -\frac{a^3 \Delta^3}{12} + O(\Delta^4)
+\end{equation}
+The noise and dissipation are no longer exactly balanced. Wolfram Alpha-verified
+from first principles. The practical magnitude is small at typical Mamba step
+sizes ($\Delta \in [0.001, 0.1]$), but the structural point stands: \textbf{ZOH
+is the FDT-exact discretization. Mamba arrived at the right answer without this
+reason for it.}
+
+\paragraph{Attribution.} The base result --- ZOH preserves stationary covariance
+in linear stochastic systems --- is standard in control theory
+\citep{vanloan1978computing}. Original here: framing as FDT preservation,
+computing the bilinear violation coefficient in the stochastic FDT context, and
+identifying its consequence for the S4$\to$Mamba transition. A four-pass search
+across arXiv, Google Scholar, IEEE databases, and SSM lineage papers found no
+prior work using FDT language for ZOH or computing this coefficient.
+
+\subsection{NTK-Aware RoPE as a Jarzynski Protocol}
+
+RoPE encodes token position by rotating $Q$ and $K$ vectors. NTK-aware context
+extension \citep{bloc97_ntk2023} shifts rotation frequencies to extend the usable
+context window. At inference time, this transition is instantaneous: all position
+frequencies switch simultaneously. This is a sudden Hamiltonian switch:
+$\mathcal{H}_\mathrm{orig} \to \mathcal{H}_\mathrm{NTK}$.
+
+The Jarzynski equality \citep{jarzynski1997nonequilibrium} bounds the dissipated
+work for sudden Hamiltonian switches: $\langle e^{-\beta W} \rangle =
+e^{-\beta \Delta F}$, hence $\langle W \rangle \geq \Delta F$. The per-head
+dissipated work is:
+\begin{equation}
+  W_\mathrm{diss} = T \cdot \mathrm{KL}(p_\mathrm{orig} \| p_\mathrm{NTK})
+\end{equation}
+
+If this framing is correct, $\Delta C_v = C_v^\mathrm{NTK} - C_v^\mathrm{orig}$
+should correlate with $W_\mathrm{diss}$. \textbf{Result:} $r(\Delta C_v,
+W_\mathrm{KL}) = 0.549$, $p = 5.5 \times 10^{-3}$, $n = 24$ Q-heads
+(LLaMA~3.2-3B, layer~18). 21/24 heads show $\Delta C_v > 0$: NTK scaling
+uniformly increases specific heat.
+
+TASB $C_v$ is the only inference-time observable capable of measuring this cost.
+Before TASB, the Jarzynski work of NTK context extension was invisible at the
+head level.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Experimental Results}
+\label{sec:experiments}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Core Validation Summary}
+
+\begin{table}[h]
+\centering
+\caption{Full experimental record. STRUCK rows are documented failed predictions.}
+\label{tab:experiments}
+\begin{tabular}{@{}p{7.5cm}rp{1.8cm}@{}}
+\toprule
+Experiment & Result & Status \\
+\midrule
+Faithfulness (M5): top-1 agreement, 8,840 positions & 98.9\%, 0 confident flips & \checkmark\ PASS \\
+Layer universality (M7-1): all 28 layers & 0 confident flips & \checkmark\ PASS \\
+$K$ sweep (M7-2): $K \in \{1,3,5,10,25,50,100\}$ & 0 flips, KL monotone $\downarrow$ & \checkmark\ PASS \\
+$\alpha$ sweep (M7-4): $\alpha \in [0, 1]$ & 0 confident flips & \checkmark\ PASS \\
+Compute overhead & $1.81\times$ ($<3\times$ threshold) & \checkmark\ PASS \\
+$r(C_v, \mathrm{KL})$ at layer~18 ($n=120$) & 0.8241, $p=6.1\times10^{-25}$ & \checkmark\ PASS \\
+$r(H(P), \mathrm{KL})$ at layer~18 / population-wide & 0.9279 / 0.9492 & \checkmark\ NEW \\
+$T=\sqrt{d_k}$ ablation & KL minimum exactly at $T=\sqrt{d_k}$ & \checkmark\ PASS \\
+Gap C: $\mathrm{KL}(\mathrm{entmax}_{1.5} \| \mathrm{softmax})$, $n=120$ & $0.109 \pm 0.070$, 120/120 $>0$ & \checkmark\ PASS \\
+$r(C_v, \mathrm{KL}_\mathrm{entmax})$, $n=120$ & 0.8156 & \checkmark\ PASS \\
+Gap B: $r(\Delta C_v, W_\mathrm{KL})$, $n=24$ heads & 0.549, $p=0.0055$ & \checkmark\ PASS \\
+Cross-arch: $r(H,\mathrm{KL})$ LLaMA$\to$Phi-3 & $0.95 \to 0.871$ (pop.); $0.93 \to 0.821$ (mid-layer) & \checkmark\ PASS \\
+Cross-arch: $r(C_v,\mathrm{KL})$ at $K=10$ & $0.82$ (LLaMA) $\to 0.470$ (Phi-3); PASS at $K\geq25$ & $\sim$\ PARTIAL \\
+Layer-depth $C_v$ ordering & Not confirmed (frozen regime $\neq$ Kim's training regime) & $\times$\ STRUCK \\
+Gumbel backend $C_v$ bias $(\pi^2/6)$ & Derivation error --- not applicable & $\times$\ STRUCK \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Architecture Validation (EXP-004)}
+
+To address the single-model-family skeptic objection, we ran TASB's thermodynamic
+validation on Phi-3-mini-4k-instruct \citep{microsoft_phi3} --- a structurally
+different architecture from a different organization:
+
+\begin{table}[h]
+\centering
+\caption{Architecture comparison: LLaMA 3.2-3B vs.\ Phi-3-mini-4k.}
+\label{tab:arch}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Property & LLaMA 3.2-3B & Phi-3-mini-4k \\
+\midrule
+Organization & Meta & Microsoft \\
+Q-heads & 24 & 32 \\
+KV-heads (GQA ratio) & 8 (3:1) & 32 (full MHA) \\
+Head dimension $d_k$ & 128 & 96 \\
+Temperature $T = \sqrt{d_k}$ & 11.31 & 9.80 \\
+Layers & 28 & 32 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Scale: 5 prompts $\times$ 32 layers $\times$ 32 heads $\times$ 6 $K$-values =
+\textbf{30,720 observations}.
+
+\begin{table}[h]
+\centering
+\caption{Phi-3-mini-4k results at mid-layer (L16), $K \in \{1,5,10,25,50,100\}$.
+Pass threshold: $r > 0.70$ for $H$; $r > 0.50$ for $C_v$.}
+\label{tab:phi3}
+\begin{tabular}{@{}rrrrrcc@{}}
+\toprule
+$K$ & $r(H,\mathrm{KL})$ all & $r(H,\mathrm{KL})$ L16 & $r(C_v,\mathrm{KL})$ all & $r(C_v,\mathrm{KL})$ L16 & $C_v$ & $H$ \\
+\midrule
+1 & 0.831 & 0.739 & $-0.040$ & 0.066 & --- & \checkmark \\
+5 & 0.895 & 0.857 & 0.070 & 0.360 & --- & \checkmark \\
+\textbf{10} & \textbf{0.871} & \textbf{0.821} & \textbf{0.184} & \textbf{0.470} & \texttildelow & \checkmark \\
+25 & 0.771 & 0.689 & 0.374 & 0.644 & \checkmark & \checkmark \\
+50 & 0.638 & 0.599 & 0.493 & 0.679 & \checkmark & --- \\
+100 & 0.489 & 0.394 & 0.539 & 0.642 & \checkmark & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Key finding.} Shannon entropy is robust and architecture-agnostic:
+$r(H,\mathrm{KL}) = 0.821$ mid-layer at $K=10$, above the 0.70 threshold, across
+both model families. The single-model-family skeptic objection is directly answered.
+
+$C_v$ is architecture-sensitive at the $K=10$ production operating point
+($r=0.470$, narrow miss). Two confounded explanations: (1) measurement-method
+gap --- LLaMA's $C_v$ was computed from raw pre-softmax logits ($\mathrm{Var}_p(s_\mathrm{raw})$)
+while Phi-3's uses $\mathrm{Var}_p(\log p)$, which are algebraically equivalent
+scalars but differ in how they distribute across heads after softmax squashing;
+(2) GQA-to-full-MHA head diversity change. These are not separable from the
+current experiment and represent an open question for future work.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Implications and What This Enables}
+\label{sec:implications}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\paragraph{Per-head thermodynamic diagnostics at inference time.}
+$C_v$ is computed from every TASB forward pass at zero additional cost. It
+provides, for every head at every layer at every token, a direct reading of
+thermodynamic activity. This diagnostic was inaccessible before TASB without
+a separate analysis pass.
+
+\paragraph{Context extension cost, now visible.}
+Every production deployment using NTK-aware RoPE context extension is implicitly
+running a Jarzynski protocol on every attention head at every extended-context
+token. The per-head dissipated work $W_\mathrm{diss} = T \cdot \mathrm{KL}(p_\mathrm{orig}
+\| p_\mathrm{NTK})$ was previously undefined, unmeasurable, and unknown. With
+TASB $C_v$ it is measurable per head, per layer, per token, at inference time.
+
+\paragraph{Thermodynamic-native model design.}
+The SSM literature has been making thermodynamically correct choices without the
+thermodynamic reasoning: Mamba's ZOH switch is the FDT-exact choice; NTK RoPE
+is a Jarzynski protocol. Both were discovered post hoc. TASB's framework makes
+it possible to design future architectures from FDT and Jarzynski constraints
+first --- a testable, falsifiable architectural principle the field has been missing.
+
+\paragraph{The two theses converge.}
+Thesis A: TASB is a hardware bridge --- frozen transformer weights, Boltzmann
+sampling, thermodynamic hardware target, zero retraining. Thesis B: TASB is a
+measurement instrument --- $C_v$ is the first inference-time thermodynamic
+observable, predicting sampling error, measuring Jarzynski work, characterizing
+heads across approximation schemes. These are not two separate projects. Thesis B
+is only possible because of Thesis A: the bridge is what exposes the thermodynamic
+state of the computation.
+
+A frozen transformer running on Extropic TSU hardware via TASB would simultaneously:
+(1) operate near-Landauer-efficient Boltzmann sampling;
+(2) generate $C_v$ measurements with every forward pass at no extra cost;
+(3) measure its own thermodynamic state --- head by head, token by token, in real time.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Prior Art and Positioning}
+\label{sec:prior}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{table}[h]
+\centering
+\caption{Prior art comparison.}
+\label{tab:prior_art}
+\begin{tabular}{@{}llp{5cm}l@{}}
+\toprule
+Work & Year & Key contribution & Relationship to TASB \\
+\midrule
+Vaswani et al.~\citep{vaswani2017attention} & 2017 & Scaled dot-product attention & Implicit Boltzmann temperature; no thermodynamic framing \\
+Ramsauer et al.~\citep{ramsauer2021hopfield} & 2021 & Hopfield $\leftrightarrow$ attention & Energy-based connection; deterministic \\
+Kajitsuka \& Sato~\citep{kajitsuka2024transformers} & 2023 & Boltzmann operator theorem & Theoretical foundation; no implementation \\
+Kim~\citep{kim2026thermodynamic} & Feb.\ 9, 2026 & Thermodynamic Lagrangian & Theoretical foundation; no hardware bridge \\
+\textbf{TASB patent filing} & \textbf{Mar.\ 28, 2026} & \textbf{Inference-time frozen-weight bridge} & \textbf{First implementation} \\
+Boltzmann Attention~\citep{boltzmann_attention2026} & Jun.\ 23, 2026 & Learnable Ising couplings & Requires training; 87 days after patent \\
+FAR~\citep{far2026} & May 2026 & BiLSTM distillation & Requires training; different approach \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+No work in the literature --- as of the patent filing date, March 28, 2026, and
+as confirmed by systematic arXiv search from February~9 to March~28, 2026 ---
+implements an inference-time, frozen-weight Boltzmann bridge for arbitrary
+transformer attention.
+
+\paragraph{Three properties, in combination, not found in any prior work.}
+\begin{enumerate}[nosep]
+  \item \textbf{Inference-time:} operates on frozen weights at inference, not training
+  \item \textbf{Exact Boltzmann:} samples from the correct distribution, not an approximation to it
+  \item \textbf{Hardware path:} direct mapping to TSU via THRML, with validated API compatibility
+\end{enumerate}
+Any two of these three properties appear in prior work. All three together do not.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section*{Acknowledgements}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+Experiments were run on Lightning.ai L4 GPU instances. The working implementation
+is available at \url{https://github.com/whtetigr2/thermobridge} with a live
+interactive demo at \url{https://huggingface.co/spaces/shvrpws/thermobridge}.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
