@@ -5,7 +5,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.50")
 
 """
-tasb_llama32_chat_runtime.py
+llama_chat.py
 ==============================================================================
 TASB — Thermodynamic Attention Sampling Bridge
 Live console chat with real-time bridge metrics
@@ -43,19 +43,19 @@ SLASH COMMANDS (type during chat)
 
 QUICKSTART
 ----------
-  pip install transformers accelerate bitsandbytes
+  pip install -e .   # from the thermobridge_cv repo root (editable install)
   huggingface-cli login
-  python tasb_llama32_chat_runtime.py
+  python examples/llama_chat.py
 
   # CPU-only (no GPU):
-  python tasb_llama32_chat_runtime.py --cpu
+  python examples/llama_chat.py --cpu
 
   # Different model:
-  python tasb_llama32_chat_runtime.py --model meta-llama/Llama-3.2-1B
+  python examples/llama_chat.py --model meta-llama/Llama-3.2-1B
 
   # THRML backend:
   pip install thrml
-  python tasb_llama32_chat_runtime.py --backend thrml
+  python examples/llama_chat.py --backend thrml
 ==============================================================================
 """
 
@@ -106,7 +106,7 @@ class BridgeConfig:
     alpha:        float       = 0.3
     layer_idx:    object      = 18       # int or List[int]
     backend:      str         = "exact"
-    K:            int         = 50
+    K:            int         = 500
     temperature:  float       = 0.8
     top_p:        float       = 0.9
     rep_penalty:  float       = 1.1
@@ -114,6 +114,25 @@ class BridgeConfig:
     compare_mode: bool        = False
     vanilla_mode: bool        = False    # bypass bridge entirely
     seed:         int         = 42       # sampling seed
+    # OOM safety ceiling (2026-07-03, real fix): generate_with_bridge now
+    # runs with use_cache=True (dual-cache design -- see that function's
+    # docstring), so per-step cost/memory is O(1) in sequence length instead
+    # of the old O(S^2) full-reprocess-per-step design. Re-measured on the
+    # same real L4 (23.66GB) under a deliberately heavy 6-turn stress load
+    # (800-token responses, growing history up to seq_len=2511): peak
+    # reserved VRAM was 8.82GB -- well under half the budget, vs. the old
+    # design's 17.85GB peak (and eventual OOM) at a fraction of that length.
+    # max_seq_len raised from 220 to 2048 -- this is the real tested ceiling
+    # (stress test's max observed seq_len was 2511, self-limited by its own
+    # history truncation before reaching the old 4096 test cap); pushing
+    # further is plausible given memory grows linearly now, not
+    # quadratically, but is NOT itself empirically verified past ~2500 --
+    # flagged rather than extrapolated as fact. Still enforced as a hard
+    # ceiling on current_ids length every step in generate_with_bridge, both
+    # as a genuine safety margin and because LLaMA-3.2-3B's practical
+    # coherence at very long context is a separate, untested question from
+    # memory safety.
+    max_seq_len:  int         = 2048
     # CSV logging state — declared fields (not runtime-bolted attributes).
     log_active:   bool          = False
     log_file:     Optional[str] = None
@@ -331,29 +350,50 @@ def generate_with_bridge(
     Uses the real tasb_sampler_v2 and tasb_injector_v2 APIs directly.
     Returns (response_text, metrics, elapsed_seconds).
     """
-    from tasb_capture_v2 import LlamaAttentionCapture
-    from tasb_sampler_v2 import sample as tasb_sample, SamplerConfig
-    from tasb_injector_v2 import LlamaAttentionInjector, DispatchEntry
+    from thermobridge.capture import LlamaAttentionCapture
+    from thermobridge.sampler import sample as tasb_sample, SamplerConfig
+    from thermobridge.inject import LlamaAttentionInjector, DispatchEntry
 
     # Build full prompt — use chat template if available (Instruct models)
     # fall back to User:/Assistant: format for base models
+    #
+    # Token-aware history truncation (2026-07-03, OOM fix): turn-count
+    # truncation alone (the old `history[-10:]` cap in chat_loop) does not
+    # bound token length, and a growing starting sequence directly compounds
+    # the per-step O(S^2) cost described on BridgeConfig.max_seq_len above.
+    # Drop the OLDEST turns first until the built prompt leaves at least
+    # half of max_seq_len free for the actual response -- if the entire
+    # history won't fit, drop all of it rather than starting already at the
+    # danger zone.
     device = next(model.parameters()).device
-    if hasattr(tok, 'chat_template') and tok.chat_template is not None:
-        messages = []
-        for turn in history:
-            messages.append({'role': 'user',      'content': turn['user']})
-            messages.append({'role': 'assistant', 'content': turn['assistant']})
-        messages.append({'role': 'user', 'content': prompt})
-        full_prompt = tok.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True)
-    else:
-        full_prompt = ""
-        for turn in history:
-            full_prompt += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
-        full_prompt += f"User: {prompt}\nAssistant:"
+    reserve_for_response = max(cfg.max_seq_len // 2, 16)
+    prompt_token_budget = max(cfg.max_seq_len - reserve_for_response, 8)
+
+    def _build_prompt(hist: List[dict]) -> str:
+        if hasattr(tok, 'chat_template') and tok.chat_template is not None:
+            messages = []
+            for turn in hist:
+                messages.append({'role': 'user',      'content': turn['user']})
+                messages.append({'role': 'assistant', 'content': turn['assistant']})
+            messages.append({'role': 'user', 'content': prompt})
+            return tok.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True)
+        else:
+            fp = ""
+            for turn in hist:
+                fp += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            return fp + f"User: {prompt}\nAssistant:"
+
+    trimmed_history = list(history)
+    full_prompt = _build_prompt(trimmed_history)
+    prompt_len = len(tok(full_prompt)['input_ids'])
+    while prompt_len > prompt_token_budget and trimmed_history:
+        trimmed_history = trimmed_history[1:]  # drop oldest turn
+        full_prompt = _build_prompt(trimmed_history)
+        prompt_len = len(tok(full_prompt)['input_ids'])
 
     inputs = tok(full_prompt, return_tensors='pt').to(device)
-    current_ids = inputs['input_ids'].clone()
+    prompt_ids = inputs['input_ids'].clone()
 
     t0             = time.time()
     all_van_logits = []
@@ -364,26 +404,63 @@ def generate_with_bridge(
     layers = ([cfg.layer_idx] if isinstance(cfg.layer_idx, int)
               else cfg.layer_idx)
 
+    # ── KV-cache generation (2026-07-03 rewrite — see BridgeConfig.max_seq_len
+    # for why the old use_cache=False design OOM'd, and tasb_capture_v2.py's
+    # module docstring for the capture-correctness half of this fix) ────────
+    #
+    # `pkv_bridge` is the ONE persistent cache for the real, actually-generated
+    # trajectory. Before every throwaway vanilla/capture pass, we deep-copy it
+    # into `pkv_shadow` -- a `Cache` object is mutated in place by the model
+    # call, so reusing `pkv_bridge` for BOTH the vanilla pass and the injected
+    # pass would silently double-advance it (confirmed empirically while
+    # building this fix: it raises a hard shape-mismatch error inside the
+    # injector rather than corrupting output silently, but it must still be
+    # avoided by construction, not caught after the fact).
+    import copy
+
+    pkv_bridge = None
+    total_seq_len = prompt_ids.shape[1]
+    hit_seq_len_ceiling = False
+
     with torch.no_grad():
         for step in range(cfg.max_new_tokens):
 
+            # Hard OOM safety ceiling — see BridgeConfig.max_seq_len. Check
+            # BEFORE attempting the next forward pass. Far less likely to
+            # trigger now that per-step cost is O(1) new-token processing
+            # instead of O(S) full-sequence reprocessing, but kept as a
+            # defensive backstop regardless.
+            if total_seq_len >= cfg.max_seq_len:
+                hit_seq_len_ceiling = True
+                break
+
+            # step_input_ids: the FULL prompt on step 0 (nothing cached yet),
+            # just the single newest token on every step after.
+            step_input_ids = (prompt_ids if step == 0
+                               else next_tok.view(1, 1))
+
             if cfg.vanilla_mode:
                 # ── Pure vanilla ──────────────────────────────────────
-                out        = model(input_ids=current_ids, use_cache=False)
+                out = model(input_ids=step_input_ids, use_cache=True,
+                            past_key_values=pkv_bridge)
                 van_logits = out.logits[:, -1, :]
                 bri_logits = van_logits.clone()
+                pkv_bridge = out.past_key_values
 
             else:
                 # ── TASB bridge ───────────────────────────────────────
-                # Step 1: Vanilla forward pass with capture
+                # Step 1: throwaway vanilla forward pass with capture, on a
+                # CLONED cache (never advances the real pkv_bridge).
+                pkv_shadow = (copy.deepcopy(pkv_bridge)
+                              if pkv_bridge is not None else None)
                 capturer = LlamaAttentionCapture(
                     model=model,
                     layers_to_capture=layers,
                     strict_verify=False,
                 )
                 with capturer.capture():
-                    van_out    = model(input_ids=current_ids,
-                                       use_cache=False)
+                    van_out = model(input_ids=step_input_ids, use_cache=True,
+                                     past_key_values=pkv_shadow)
                 van_logits = van_out.logits[:, -1, :]
 
                 # Step 2: Sample p_thermo at each target layer
@@ -404,15 +481,22 @@ def generate_with_bridge(
                         alpha    = cfg.alpha,
                     )
 
-                # Step 3: Injected forward pass
+                # Step 3: Injected forward pass on the REAL cache — this is
+                # the only call allowed to advance pkv_bridge.
                 if dispatch:
                     injector = LlamaAttentionInjector(dispatch)
                     with injector.inject():
-                        bri_out    = model(input_ids=current_ids,
-                                           use_cache=False)
+                        bri_out = model(input_ids=step_input_ids, use_cache=True,
+                                         past_key_values=pkv_bridge)
                     bri_logits = bri_out.logits[:, -1, :]
+                    pkv_bridge = bri_out.past_key_values
                 else:
                     bri_logits = van_logits.clone()
+                    # No injection happened -- still must advance the real
+                    # cache with this step's token, via an uninjected call.
+                    fallback_out = model(input_ids=step_input_ids, use_cache=True,
+                                         past_key_values=pkv_bridge)
+                    pkv_bridge = fallback_out.past_key_values
 
             # Both (1, vocab) → squeeze to (vocab,)
             van_1d = van_logits.squeeze(0)
@@ -441,12 +525,10 @@ def generate_with_bridge(
             next_tok = sorted_i[torch.multinomial(sorted_p, 1)]
 
             generated_ids.append(next_tok.item())
+            total_seq_len += 1
 
             if next_tok.item() == tok.eos_token_id:
                 break
-
-            current_ids = torch.cat(
-                [current_ids, next_tok.view(1, 1)], dim=1)
 
             # Stop at turn boundary
             gen_so_far = tok.decode(generated_ids,
@@ -470,7 +552,7 @@ def generate_with_bridge(
     if torch.cuda.is_available():
         _alloc = torch.cuda.memory_allocated()  / 1e9
         _resv  = torch.cuda.memory_reserved()   / 1e9
-        print(f"  [VRAM] allocated={_alloc:.2f}GB  reserved={_resv:.2f}GB  seq_len={current_ids.shape[1]}")
+        print(f"  [VRAM] allocated={_alloc:.2f}GB  reserved={_resv:.2f}GB  seq_len={total_seq_len}")
     if cfg.backend == "thrml":
         # JAX/XLA maintains its own allocator pool, separate from
         # torch.cuda -- the [VRAM] numbers above do not see it.
@@ -490,6 +572,10 @@ def generate_with_bridge(
     elapsed  = time.time() - t0
     response = tok.decode(generated_ids,
                           skip_special_tokens=True).strip()
+    if hit_seq_len_ceiling:
+        # Honest, visible truncation notice -- do not silently hand back a
+        # cut-off response as if it were complete. See BridgeConfig.max_seq_len.
+        response += " [response truncated: hit the sequence-length safety ceiling]"
 
     if all_van_logits and not cfg.vanilla_mode:
         van_stack = torch.stack(all_van_logits)
@@ -582,25 +668,23 @@ def parse_command(cmd: str, cfg: BridgeConfig) -> Tuple[bool, str]:
 
     elif command == "/backend":
         if len(parts) < 2:
-            return True, "Usage: /backend exact|gumbel|rbm|thrml|qubo|vanilla"
+            return True, "Usage: /backend exact|gumbel|rbm|thrml|vanilla"
         b = parts[1].lower()
         if b == "vanilla":
             cfg.vanilla_mode = True
             return True, "Bridge disabled — pure vanilla LLaMA"
-        elif b in ("exact", "thrml", "gumbel", "rbm", "qubo"):
+        elif b in ("exact", "thrml", "gumbel", "rbm"):
             cfg.vanilla_mode = False
             prev_backend = cfg.backend
             cfg.backend = b
             note = ""
             if b == "thrml" and prev_backend != "thrml":
                 note = " (first turn will JIT-compile ~30s)"
-            elif b == "qubo" and prev_backend != "qubo":
-                note = " (CPU Gibbs sampler; expect slow turns at S>10)"
             return True, f"Backend: {prev_backend} -> {b}{note}. Next turn will use {b}."
 
             return True, f"Backend set to {b}"
         else:
-            return True, f"Unknown backend: {b}. Options: exact, gumbel, rbm, thrml, qubo, vanilla"
+            return True, f"Unknown backend: {b}. Options: exact, gumbel, rbm, thrml, vanilla"
 
     elif command == "/k":
         if len(parts) < 2:
@@ -663,7 +747,6 @@ Commands:
   /backend gumbel   Gumbel-max logit-space sampler
   /backend rbm      RBM Gibbs sampler
   /backend thrml    THRML Boltzmann sampler (requires pip install thrml)
-  /backend qubo     QUBO p-bit substrate emulator (CPU; ~5s/head at S=15)
   /backend vanilla  disable bridge entirely
   /k 50             number of Boltzmann samples
   /temp 0.8         generation temperature
@@ -976,8 +1059,8 @@ if __name__ == "__main__":
     parser.add_argument("--alpha",   type=float, default=0.3)
     parser.add_argument("--layer",   type=int,   default=18)
     parser.add_argument("--backend", default="exact",
-        choices=["exact","gumbel","rbm","thrml","qubo","vanilla"])
-    parser.add_argument("--k",       type=int,   default=50)
+        choices=["exact","gumbel","rbm","thrml","vanilla"])
+    parser.add_argument("--k",       type=int,   default=500)
     parser.add_argument("--temp",    type=float, default=0.8)
     parser.add_argument("--cpu",     action="store_true")
     parser.add_argument("--max-tokens", type=int, default=256)
@@ -997,7 +1080,7 @@ if __name__ == "__main__":
     model, tok = load_model(args.model, use_cpu=args.cpu)
 
     try:
-        from tasb_pipeline_v2 import bridge_forward
+        from thermobridge.bridge import bridge_forward
         print(c("  TASB pipeline: ready", C.GREEN))
     except ImportError:
         print(c("  WARNING: tasb_pipeline_v2.py not found. "

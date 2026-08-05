@@ -40,3 +40,4 @@ Thumbs.db
 *.log
 *.local
 secrets.local.md
+validation/results/dtm_paper_*

@@ -1,0 +1,11 @@
+==============================================================================
+VARIATIONAL COMPILATION of the gate factor (Thermalizers-style)
+==============================================================================
+    S  KL heuristic  KL compiled   TV heur   TV comp       a       b
+   16        0.0134       0.0014    0.0676    0.0136    1.07   -3.91
+   32        0.1617       0.0053    0.2357    0.0392    1.05   -4.07
+   64        0.2972       0.0083    0.2718    0.0364    1.07   -4.33
+  128        0.2422       0.0124    0.2502    0.0503    1.07   -4.45
+
+Fitted a ~ how sharply the field tracks the logits; b ~ the activity level.
+If compiled KL << heuristic KL, the top-k threshold was leaving error on the table.

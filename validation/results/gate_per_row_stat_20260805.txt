@@ -1,0 +1,16 @@
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+========================================================================
+per-row statistic sweep — baseline 65.88
+========================================================================
+  categorical (K=32)            :    90.74    1.38x
+  topk gate frac=0.02           :    80.03    1.21x
+  topk gate frac=0.05           :   543.98    8.26x
+  zscore gate a=1.0  b=0.0        :  2713.70   41.19x
+  zscore gate a=1.0  b=-1.5       :  1412.42   21.44x
+  zscore gate a=1.0  b=-3.0       :  1058.25   16.06x
+  zscore gate a=2.0  b=0.0        :  2564.00   38.92x
+  zscore gate a=2.0  b=-1.5       :  2013.17   30.56x
+  zscore gate a=2.0  b=-3.0       :  1126.32   17.10x
+  zscore gate a=3.0  b=0.0        :  3481.36   52.84x
+  zscore gate a=3.0  b=-1.5       :  2791.60   42.37x
+  zscore gate a=3.0  b=-3.0       :  2096.58   31.82x

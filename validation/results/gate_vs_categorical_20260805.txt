@@ -1,0 +1,12 @@
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+========================================================================
+TEST F — head-to-head, identical text.  baseline 65.88   random floor 5602.9
+========================================================================
+    K   categorical   gate(top2%)  cat xbase  gate xbase
+    8        215.45        193.23       3.27x        2.93x
+   32         90.36         76.52       1.37x        1.16x
+  128         68.09         67.18       1.03x        1.02x
+  512         66.39         65.45       1.01x        0.99x
+
+gate is FULLY PARALLEL (bipartite, no mutual exclusion, no K_S).
+categorical needs a mutual-exclusion constraint -> complete graph -> O(S) sequential.

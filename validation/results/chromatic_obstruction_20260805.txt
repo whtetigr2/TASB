@@ -1,0 +1,19 @@
+==============================================================================
+TEST A — chromatic-number obstruction: one block (K_S) vs S single-node blocks
+==============================================================================
+
+  S=8
+    blocking  lambda  warmup        TV  invalid     sec
+         one     2.0    2000       n/a    1.000    2.44
+         one     4.0    2000       n/a    1.000    1.81
+        perS     2.0    2000    0.0294    0.496   20.43
+        perS     4.0    2000    0.0476    0.116   20.75
+
+  S=16
+    blocking  lambda  warmup        TV  invalid     sec
+         one     2.0    2000       n/a    1.000    2.46
+         one     4.0    2000       n/a    1.000    2.46
+        perS     2.0    2000    0.0255    0.539   44.13
+        perS     4.0    2000    0.0387    0.138   44.48
+
+PREDICTION: 'one' fails (invalid high, TV bad); 'perS' converges (invalid low, TV small).

@@ -1,0 +1,18 @@
+============================================================================
+IS THE SPARSE SUPPORT SHARED (fixed wiring) OR PER-QUERY (needs routing)?
+============================================================================
+
+  GPT-2 (absolute)  (k=16, S=92)
+    top-k support overlap between adjacent queries (Jaccard) : 0.529
+    mass captured, ADAPTIVE per-query wiring                 : 0.881
+    mass captured, best FIXED absolute-position wiring       : 0.704
+    mass captured, best FIXED relative-offset wiring         : 0.495
+
+  SmolLM2 (RoPE)  (k=16, S=90)
+    top-k support overlap between adjacent queries (Jaccard) : 0.542
+    mass captured, ADAPTIVE per-query wiring                 : 0.924
+    mass captured, best FIXED absolute-position wiring       : 0.778
+    mass captured, best FIXED relative-offset wiring         : 0.468
+
+Jaccard near 1 -> one wiring serves all queries. Near 0 -> per-token routing.
+If FIXED wiring captures nearly as much mass as ADAPTIVE, Z1 topology suffices.

@@ -7,20 +7,57 @@ Author: Paul W. Shaver
 During a forward pass on a frozen LLaMA model, this module captures the
 canonical attention state at one or more designated layers:
 
-  * q_post_rope    — post-RoPE query  (B, n_q_heads,  S, head_dim)
-  * k_post_rope    — post-RoPE key    (B, n_kv_heads, S, head_dim)
-  * attention_mask — live HF mask     (B, 1, S, S)
+  * q_post_rope    — post-RoPE query  (B, n_q_heads,  Sq, head_dim)
+  * k_post_rope    — post-RoPE key    (B, n_kv_heads, Sk, head_dim)
+  * attention_mask — live HF mask     (B, 1, Sq, Sk)
   * scaling        — HF scaling factor (typically 1/√d_k)
   * attn_weights   — post-softmax weights (verify_capture only)
 
+Sq == Sk during full-sequence reprocessing (prefill, or any use_cache=False
+call). Sq == 1 < Sk during a single-token KV-cached decode step — one new
+query row attending to the full cached key history. Nothing downstream
+should assume Sq == Sk.
+
+REWRITE (2026-07-04) — KV-cache correctness
+--------------------------------------------
+The original version patched TWO functions: `apply_rotary_pos_emb` (to grab
+post-RoPE Q/K) and `eager_attention_forward` (to grab attention_mask/scaling/
+attn_weights), merging the two scratch dicts after the forward pass, with
+layer identification done by walking the Python call stack for the owning
+LlamaAttention instance.
+
+That design breaks under KV-cache decoding: `apply_rotary_pos_emb` fires on
+only the NEWLY COMPUTED query/key for the current step (shape
+(B, n, 1, head_dim) once a KV cache is in use) — but `eager_attention_forward`'s
+`key`/`value` arguments are the FULL, already-cache-concatenated sequence
+(HF's `LlamaAttention.forward` calls `past_key_value.update(...)` to get the
+full K/V *before* calling the attention interface function). Capturing K from
+the RoPE patch under caching would silently capture only the newest 1-token
+slice instead of the full history the bridge actually needs — a correctness
+bug, not merely an inefficiency. This was found and fixed in the
+`Active_Dev/TASB` working copy (`tasb_capture_v2.py`) on 2026-07-03 as part of
+root-causing a live-chat OOM (the OOM fix itself required `use_cache=True`,
+which is exactly the mode this bug lived in); this file is the same fix
+ported into the real installed package, which had not been touched.
+
+Fix: capture Q and K directly from `eager_attention_forward`'s own
+`query`/`key` arguments instead. Both are already post-RoPE (RoPE is always
+applied before the attention interface is called) and already reflect
+whatever the model actually attended over — correct in both full
+reprocessing (Sq==Sk) and under KV-cache decoding (Sq=1, Sk=S_total). This
+also eliminates the separate RoPE patch, the two-scratch-dict merge, and the
+stack-walk-based layer lookup entirely — `eager_attention_forward`'s own
+first positional argument, `module`, IS the owning LlamaAttention instance,
+with `.layer_idx` set by HF at model-build time (the same `module.layer_idx`
+lookup `inject.py` already used, correctly, from day one).
+
 DESIGN
 ------
-1. LlamaAttention.forward is not modified. Only apply_rotary_pos_emb and
-   eager_attention_forward are patched at the module level.
+1. LlamaAttention.forward is not modified. Only eager_attention_forward is
+   patched at the module level.
 
-2. Layer identification via call-stack owner-discovery: when the patched
-   function fires, walk the stack to find the LlamaAttention instance that
-   owns the call. Robust to call ordering changes.
+2. Layer identification via `module.layer_idx` (module is
+   eager_attention_forward's own first argument — no stack walking).
 
 3. Signature-adaptive patching: kwargs are filtered through the original
    function's signature at runtime, ensuring cross-version compatibility.
@@ -30,8 +67,8 @@ DESIGN
 
 5. Capture invariant checked in strict mode:
        softmax(Q_post @ repeat_kv(K_post).T * scaling + mask) ≈ attn_weights
-   Checked at every captured step. Failure raises immediately — invalid
-   science fails loud, not silently.
+   Checked at every captured step, handling both Sq==Sk and Sq==1<Sk.
+   Failure raises immediately — invalid science fails loud, not silently.
 
 6. Per-layer subset: only layers in layers_to_capture are captured.
 
@@ -41,7 +78,7 @@ USAGE
 
     capturer = LlamaAttentionCapture(model, layers_to_capture=[18])
     with capturer.capture():
-        out = model(input_ids)
+        out = model(input_ids)  # or model(new_token, past_key_values=pkv, use_cache=True)
     captured = capturer.get_capture(18)
 
 MASK CONVENTION
@@ -67,18 +104,18 @@ from transformers.models.llama.modeling_llama import (
 )
 
 
-# Snapshot original references once at import time
-_ORIG_APPLY_ROTARY = _llama_mod.apply_rotary_pos_emb
+# Snapshot original reference at import time
 _ORIG_EAGER = getattr(_llama_mod, 'eager_attention_forward', None)
+if _ORIG_EAGER is None:
+    raise ImportError(
+        "thermobridge.capture: transformers.models.llama.modeling_llama."
+        "eager_attention_forward not found. This capture module requires "
+        "an HF transformers version that exposes eager_attention_forward "
+        "at module level (attn_implementation='eager'). Re-validate against "
+        "the installed transformers version before use.")
 
-_ROTARY_SIG = inspect.signature(_ORIG_APPLY_ROTARY)
-_ROTARY_PARAMS = set(_ROTARY_SIG.parameters.keys())
-if _ORIG_EAGER is not None:
-    _EAGER_SIG = inspect.signature(_ORIG_EAGER)
-    _EAGER_PARAMS = set(_EAGER_SIG.parameters.keys())
-else:
-    _EAGER_SIG = None
-    _EAGER_PARAMS = set()
+_EAGER_SIG = inspect.signature(_ORIG_EAGER)
+_EAGER_PARAMS = set(_EAGER_SIG.parameters.keys())
 
 
 def _get_attn_registry_eager():
@@ -101,17 +138,22 @@ def _get_attn_registry_eager():
 
 @dataclass
 class LayerCapture:
-    """Per-layer captured state from one forward pass.
+    """Per-layer captured state from one forward pass (or one decode step).
 
-    All tensors are on the device they were captured on.
+    All tensors are on the device they were captured on. Shapes:
+      q_post_rope:    (B, n_q,  Sq, head_dim)
+      k_post_rope:    (B, n_kv, Sk, head_dim)
+      attention_mask: (B, 1, Sq, Sk) or None
+      attn_weights:   (B, n_q, Sq, Sk)
     """
     layer_idx: int
-    q_post_rope: torch.Tensor     # (B, n_q,  S, head_dim)
-    k_post_rope: torch.Tensor     # (B, n_kv, S, head_dim)
-    attention_mask: torch.Tensor | None  # (B, 1, S, S) or None
+    q_post_rope: torch.Tensor     # (B, n_q,  Sq, head_dim)
+    k_post_rope: torch.Tensor     # (B, n_kv, Sk, head_dim)
+    attention_mask: torch.Tensor | None  # (B, 1, Sq, Sk) or None
     scaling: float
-    attn_weights: torch.Tensor    # (B, n_q, S, S)
-    seq_len: int
+    attn_weights: torch.Tensor    # (B, n_q, Sq, Sk)
+    seq_len: int                  # key-side context length (Sk); use
+                                   # q_post_rope.shape[-2] if you need Sq
     dtype: torch.dtype
 
     def to_numpy(self) -> dict[str, Any]:
@@ -148,11 +190,11 @@ class CaptureConfig:
 # ---------------------------------------------------------------------------
 
 class LlamaAttentionCapture:
-    """RoPE-aware per-Q-head attention capture for LLaMA models.
+    """RoPE-aware per-Q-head attention capture for LLaMA models, correct
+    under both full-sequence reprocessing and KV-cache decoding.
 
-    Patches transformers.models.llama.modeling_llama.apply_rotary_pos_emb
-    and eager_attention_forward at the module level. LlamaAttention.forward
-    is not modified.
+    Patches transformers.models.llama.modeling_llama.eager_attention_forward
+    at the module level. LlamaAttention.forward is not modified.
 
     Use as a context manager:
 
@@ -190,125 +232,82 @@ class LlamaAttentionCapture:
             log_calls=log_calls,
         )
         self.layer_set = set(self.config.layers_to_capture)
-        self._rope_scratch: dict[int, dict[str, torch.Tensor]] = {}
-        self._eager_scratch: dict[int, dict[str, Any]] = {}
         self.captured: dict[int, LayerCapture] = {}
         self._installed = False
         self._registry_obj = None
         self._registry_orig = None
-        self.n_rope_calls = 0
         self.n_eager_calls = 0
         self.n_captured_steps = 0
-
-    @staticmethod
-    def _find_owning_layer_idx() -> int | None:
-        """Walk the call stack to find the LlamaAttention that owns this call."""
-        frame = inspect.currentframe()
-        if frame is None:
-            return None
-        try:
-            frame = frame.f_back
-            depth_limit = 16
-            while frame is not None and depth_limit > 0:
-                local_self = frame.f_locals.get('self')
-                if isinstance(local_self, _LlamaAttention):
-                    return getattr(local_self, 'layer_idx', None)
-                frame = frame.f_back
-                depth_limit -= 1
-        finally:
-            del frame
-        return None
 
     @staticmethod
     def _filter_kwargs(kwargs: dict, allowed: set[str]) -> dict:
         """Return only kwargs accepted by the target function signature."""
         return {k: v for k, v in kwargs.items() if k in allowed}
 
-    def _make_patched_rope(self):
-        orig = _ORIG_APPLY_ROTARY
-        allowed = _ROTARY_PARAMS
-        layer_set = self.layer_set
-        scratch = self._rope_scratch
-        log = self.config.log_calls
-
-        def patched(*args, **kwargs):
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
-            q_out, k_out = orig(*args, **filtered_kwargs)
-
-            layer_idx = LlamaAttentionCapture._find_owning_layer_idx()
-            self.n_rope_calls += 1
-            if log:
-                print(f"  [rope #{self.n_rope_calls}] layer_idx={layer_idx}")
-
-            # Fail loud if the stack-walk breaks — a silent drop would produce
-            # incorrect captures without any indication.
-            if layer_idx is None:
-                raise RuntimeError(
-                    "LlamaAttentionCapture: _find_owning_layer_idx() returned "
-                    f"None on rope call #{self.n_rope_calls}. The HF call stack "
-                    "changed; post-RoPE Q/K capture cannot be trusted. "
-                    "Re-validate the capture patch against the installed "
-                    "transformers version.")
-
-            if layer_idx in layer_set:
-                if len(args) >= 4:
-                    q_pre, k_pre, cos, sin = args[0], args[1], args[2], args[3]
-                    scratch[layer_idx] = {
-                        'q_pre_rope':  q_pre.detach().clone(),
-                        'k_pre_rope':  k_pre.detach().clone(),
-                        'cos':         cos.detach().clone(),
-                        'sin':         sin.detach().clone(),
-                        'q_post_rope': q_out.detach().clone(),
-                        'k_post_rope': k_out.detach().clone(),
-                    }
-                else:
-                    raise RuntimeError(
-                        f"LlamaAttentionCapture: target layer {layer_idx} rope "
-                        f"call had {len(args)} positional args (<4); cannot "
-                        "capture post-RoPE Q/K. HF signature changed.")
-
-            return q_out, k_out
-
-        return patched
-
     def _make_patched_eager(self):
-        if _ORIG_EAGER is None:
-            return None
-
+        """Build a closure that captures Q/K/mask/scaling/attn_weights
+        directly from this call's own arguments — correct whether this call
+        is a full-sequence prefill (Sq==Sk) or a single-token KV-cached
+        decode step (Sq=1 < Sk)."""
         orig = _ORIG_EAGER
         allowed = _EAGER_PARAMS
         layer_set = self.layer_set
-        eager_scratch = self._eager_scratch
+        captured = self.captured
         log = self.config.log_calls
 
         def patched(*args, **kwargs):
             filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
             attn_output, attn_weights = orig(*args, **filtered_kwargs)
 
-            layer_idx = LlamaAttentionCapture._find_owning_layer_idx()
             self.n_eager_calls += 1
+
+            if not args:
+                return attn_output, attn_weights
+            module = args[0]
+            layer_idx = getattr(module, 'layer_idx', None)
+
             if log:
                 print(f"  [eager #{self.n_eager_calls}] layer_idx={layer_idx}")
 
             if layer_idx is None:
                 raise RuntimeError(
-                    "LlamaAttentionCapture: _find_owning_layer_idx() returned "
-                    f"None on eager call #{self.n_eager_calls}. The HF call "
-                    "stack changed — capture cannot be trusted.")
+                    "LlamaAttentionCapture: eager_attention_forward's module "
+                    f"argument has no layer_idx on call #{self.n_eager_calls}. "
+                    "HF internals changed in a way that breaks layer "
+                    "identification. Failing loud instead of silently "
+                    "skipping capture.")
 
             if layer_idx in layer_set:
+                if len(args) < 3:
+                    raise RuntimeError(
+                        f"LlamaAttentionCapture: target layer {layer_idx} "
+                        f"eager_attention_forward call had {len(args)} "
+                        "positional args (<3); cannot read query/key to "
+                        "capture. HF signature changed.")
+                query = args[1]
+                key   = args[2]
                 attention_mask = (args[4] if len(args) > 4
                                   else kwargs.get('attention_mask'))
-                scaling_val = kwargs.get('scaling', None)
-                if scaling_val is None and len(args) > 5:
-                    scaling_val = args[5] if isinstance(args[5], float) else None
-                eager_scratch[layer_idx] = {
-                    'attention_mask': (attention_mask.detach().clone()
-                                        if attention_mask is not None else None),
-                    'scaling': (float(scaling_val) if scaling_val is not None
-                                else None),
-                    'attn_weights': attn_weights.detach().clone(),
-                }
+                scaling_val = (args[5] if len(args) > 5
+                               else kwargs.get('scaling'))
+                if scaling_val is None:
+                    raise RuntimeError(
+                        f"LlamaAttentionCapture: target layer {layer_idx} "
+                        "eager_attention_forward call had no resolvable "
+                        "`scaling` value. Cannot capture without it.")
+
+                captured[layer_idx] = LayerCapture(
+                    layer_idx=layer_idx,
+                    q_post_rope=query.detach().clone(),
+                    k_post_rope=key.detach().clone(),
+                    attention_mask=(attention_mask.detach().clone()
+                                     if attention_mask is not None else None),
+                    scaling=float(scaling_val),
+                    attn_weights=attn_weights.detach().clone(),
+                    seq_len=key.shape[-2],
+                    dtype=query.dtype,
+                )
+                self.n_captured_steps += 1
 
             return attn_output, attn_weights
 
@@ -316,9 +315,14 @@ class LlamaAttentionCapture:
 
     def _verify_one_layer(self, layer_idx: int,
                           cap: LayerCapture) -> tuple[bool, dict]:
-        """Reconstruct softmax(Q@K.T * scale + mask) and compare to attn_weights."""
+        """Reconstruct softmax(Q@K.T * scale + mask) and compare to
+        attn_weights. Handles both Sq==Sk (prefill) and Sq==1<Sk (cached
+        decode) shapes."""
         Q = cap.q_post_rope
         K = cap.k_post_rope
+
+        Sq = Q.shape[-2]
+        Sk = K.shape[-2]
 
         n_q = Q.shape[1]
         n_kv = K.shape[1]
@@ -329,7 +333,6 @@ class LlamaAttentionCapture:
         K_rep = _repeat_kv(K, kv_groups)
         scores = torch.matmul(Q, K_rep.transpose(-2, -1)) * cap.scaling
 
-        # Additive mask (HF uses large-negative sentinel, not masked_fill)
         if cap.attention_mask is not None:
             scores = scores + cap.attention_mask
 
@@ -339,13 +342,22 @@ class LlamaAttentionCapture:
         diff = (recon.float() - cap.attn_weights.float()).abs()
         diff_np = diff.detach().cpu().numpy()
 
+        # Build valid-position mask. Three cases:
+        #  - A real attention_mask is present: use it directly (correct for
+        #    any Sq/Sk shape).
+        #  - No mask, Sq == Sk: standard full-sequence causal mask.
+        #  - No mask, Sq == 1 < Sk: a single newly-appended query token,
+        #    causally valid against every cached key position — no masking
+        #    needed (HF supplies an all-zero mask for this case anyway).
         if cap.attention_mask is not None:
             valid = (cap.attention_mask > -1e30).detach().cpu().numpy()
             valid = np.broadcast_to(valid, diff_np.shape)
-        else:
-            S = cap.seq_len
-            causal = np.triu(np.ones((S, S), dtype=bool), 1)
+        elif Sq == Sk:
+            causal = np.triu(np.ones((Sq, Sk), dtype=bool), 1)
             valid = np.broadcast_to(~causal, diff_np.shape)
+        else:
+            valid_2d = np.ones((Sq, Sk), dtype=bool)
+            valid = np.broadcast_to(valid_2d, diff_np.shape)
 
         valid_diffs = diff_np[valid]
         max_diff = float(valid_diffs.max())
@@ -388,54 +400,23 @@ class LlamaAttentionCapture:
 
         return results
 
-    def _finalize(self):
-        """Merge rope and eager scratch into LayerCapture objects."""
-        for layer_idx in self.config.layers_to_capture:
-            if layer_idx not in self._rope_scratch:
-                continue
-            if layer_idx not in self._eager_scratch:
-                continue
-
-            rs = self._rope_scratch[layer_idx]
-            es = self._eager_scratch[layer_idx]
-
-            cap = LayerCapture(
-                layer_idx=layer_idx,
-                q_post_rope=rs['q_post_rope'],
-                k_post_rope=rs['k_post_rope'],
-                attention_mask=es['attention_mask'],
-                scaling=es['scaling'],
-                attn_weights=es['attn_weights'],
-                seq_len=rs['q_post_rope'].shape[-2],
-                dtype=rs['q_post_rope'].dtype,
-            )
-            self.captured[layer_idx] = cap
-            self.n_captured_steps += 1
-
     @contextmanager
     def capture(self):
-        """Install patches, yield, restore patches unconditionally in finally."""
+        """Install patch, yield, restore patch unconditionally in finally."""
         if self._installed:
             raise RuntimeError(
                 "capture() is not re-entrant. Use a new LlamaAttentionCapture "
                 "instance for each forward.")
 
-        self._rope_scratch.clear()
-        self._eager_scratch.clear()
         self.captured.clear()
-        self.n_rope_calls = 0
         self.n_eager_calls = 0
         self.n_captured_steps = 0
 
-        patched_rope = self._make_patched_rope()
         patched_eager = self._make_patched_eager()
-
-        _llama_mod.apply_rotary_pos_emb = patched_rope
-        if patched_eager is not None and _ORIG_EAGER is not None:
-            _llama_mod.eager_attention_forward = patched_eager
+        _llama_mod.eager_attention_forward = patched_eager
 
         self._registry_obj, self._registry_orig = _get_attn_registry_eager()
-        if self._registry_obj is not None and patched_eager is not None:
+        if self._registry_obj is not None:
             self._registry_obj['eager'] = patched_eager
 
         self._installed = True
@@ -443,13 +424,10 @@ class LlamaAttentionCapture:
         try:
             yield self
         finally:
-            _llama_mod.apply_rotary_pos_emb = _ORIG_APPLY_ROTARY
-            if _ORIG_EAGER is not None:
-                _llama_mod.eager_attention_forward = _ORIG_EAGER
+            _llama_mod.eager_attention_forward = _ORIG_EAGER
             if self._registry_obj is not None and self._registry_orig is not None:
                 self._registry_obj['eager'] = self._registry_orig
             self._installed = False
-            self._finalize()
             if self.config.strict_verify and self.captured:
                 self.verify_capture()
 
@@ -469,7 +447,6 @@ class LlamaAttentionCapture:
         lines = [
             "LlamaAttentionCapture summary:",
             f"  layers_to_capture: {self.config.layers_to_capture}",
-            f"  rope calls observed:  {self.n_rope_calls}",
             f"  eager calls observed: {self.n_eager_calls}",
             f"  captured layers:      {list(self.captured.keys())}",
             f"  strict_verify:        {self.config.strict_verify}",
@@ -486,11 +463,7 @@ class LlamaAttentionCapture:
 
 if __name__ == "__main__":
     print("capture.py self-checks:")
-    print(f"  apply_rotary_pos_emb params: {sorted(_ROTARY_PARAMS)}")
-    if _ORIG_EAGER is not None:
-        print(f"  eager_attention_forward params: {sorted(_EAGER_PARAMS)}")
-    else:
-        print("  eager_attention_forward: not found (older transformers?)")
+    print(f"  eager_attention_forward params: {sorted(_EAGER_PARAMS)}")
     reg, _ = _get_attn_registry_eager()
     print(f"  ALL_ATTENTION_FUNCTIONS: {'present' if reg else 'absent'}")
     print("  Module loads cleanly.")
