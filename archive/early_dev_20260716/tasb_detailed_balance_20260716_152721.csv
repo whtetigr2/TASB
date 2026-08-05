@@ -1,0 +1,2 @@
+S,K,n_positions_tested,n_chi2_pass,frac_chi2_pass,mean_p_value,mean_kl,mean_tv,elapsed_s,pass
+512,1200,12192,11523,0.9451,0.4926,0.6929098,0.1546305,4.82,True
